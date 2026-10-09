@@ -1,5 +1,8 @@
 node_modules/
-main.js
+# Build output (esbuild `outfile: 'main.js'`), root only. Anchored with a leading slash so
+# archived one-off probe plugins under .trellis/tasks/**/spikes/ stay tracked — losing them
+# means losing the only record of how a spike's conclusions were obtained.
+/main.js
 *.js.map
 .DS_Store
 

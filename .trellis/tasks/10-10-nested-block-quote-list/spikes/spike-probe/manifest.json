@@ -1,0 +1,8 @@
+{
+  "id": "spike-probe",
+  "name": "Spike Probe",
+  "version": "0.0.1",
+  "minAppVersion": "1.7.0",
+  "description": "Throwaway spike harness. Not a product.",
+  "isDesktopOnly": true
+}

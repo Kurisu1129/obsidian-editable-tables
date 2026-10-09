@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/frontend/data-safety.md", "reason": "检查阶段第一优先级：确认 writeback.ts 仍是唯一写盘点，引用块渲染路径没有任何写入（R18/AC19）。阶段 1 把 writeback 入参窄化为 TableRegion 后要复核类型窄化没有留下绕过口。任何新增写入路径都是高危发现"}
+{"file": ".trellis/spec/frontend/codemirror-widgets.md", "reason": "逐条对照接管契约静态核查：新 widget 是否实现 eq（偏移量 + 源码双重比较）、是否准确报告高度、是否在 destroy(dom) 里断开 ResizeObserver **并 unload Component**、控件是否放在 widget 盒内。接管类型变成 2 种，每条都要重过"}
+{"file": ".trellis/tasks/10-10-nested-block-quote-list/research/markdown-renderer-in-widget.md", "reason": "quoteWidget 的三个坑是静态核查的重点：① render 是追加语义，渲染前没清容器就会内容叠加；② 没传 Component 或没 unload 会 console.error 并泄漏嵌入的事件处理器；③ 异步导致高度未知，没做占位 + requestMeasure 就会光标偏移。逐条对照实现验证"}
+{"file": ".trellis/tasks/10-10-nested-block-quote-list/research/container-indent.md", "reason": "AC17 的判定依据与观测手法：必须用 document.createRange() 取字形盒，不能用 .cm-line 的 getBoundingClientRect（恒为整行宽）。含修复前的基线（表格 widget 376 vs 父项正文 409，外凸 33px）作为回归对比"}
+{"file": ".trellis/spec/frontend/testing.md", "reason": "验收通道的环境陷阱：重置文档必须 editor.setValue + 回读校验；结果可疑时先重启 Obsidian 而不是改代码。AC21（AC1–AC13 不得回归）要在这套通道上跑，假阴性会直接导致误判"}
+{"file": ".trellis/tasks/10-10-nested-block-quote-list/research/quote-render-strategy-options.md", "reason": "核查实现是否真的走了路径 B（整段接管 + MarkdownRenderer），以及有没有悄悄滑向「只接管内层块」。该文档明确论证了只接管内层在引用块场景不可行，且 callout 场景（D6 后置）不属于本任务范围，出现 callout 接管代码即为范围蔓延"}
+{"file": ".trellis/tasks/10-10-nested-block-quote-list/research/spike-0-findings.md", "reason": "核查实现是否照门禁结论执行：缩进必须用 margin-left 而非 padding-left（后者不移动背景盒，视觉上仍未对齐）；!important 只允许出现在列表内代码块行这一处，且必须有注释说明理由，出现第二处即为规范违背"}
