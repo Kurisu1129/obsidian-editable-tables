@@ -46,3 +46,48 @@
 
 - 后续切片（不在本任务内）：列表项内嵌非表格块（代码块、引用）、callout 内表格修复
 - 本仓库为本次新建，尚无 remote
+
+
+## Session 2: 引用块与列表项内嵌块的渲染与对齐
+<!-- trellis-session: v=2 fp=529a52092b984580 -->
+
+**Date**: 2026-10-10
+**Task**: 引用块与列表项内嵌块的渲染与对齐
+**Branch**: `main`
+
+### Summary
+
+补齐嵌套容器内的块级渲染的**规划与门禁**，本次不含产品代码。范围经两轮复核收窄为：纯引用块内的块级内容渲染、列表项内嵌块的缩进对齐；代码块不接管，callout 后置到单独任务。两个门禁 spike 均已通过，实施明确后置。
+
+### Main Changes
+
+- prd/design/implement 三件套：region 判别联合（table/quote）复用同一套 field/装饰/快速路径；引用块走整段 replace + MarkdownRenderer 渲染（只读，零新增写盘路径）；缩进用 CM6 行装饰
+- 门禁 0.1 通过：引用块可接管且**不需要 Prec.highest**（纯引用块没有原生 widget 争区间，风险低于上一任务），不影响既有表格接管
+- 门禁 0.2 通过：缩进**只有 margin-left: Npx !important 可行**；padding-left 只动文字不动背景盒，position/transform 会让盒子右侧溢出被 contain:paint 裁
+- !important 的必要性与既有告诫的张力已记入 design.md 与 spec：宿主把 margin 写在级联层且带 !important，压过非 important 的 inline；限定只允许出现在'列表内代码块行'一处并须注释理由
+- 规划期复核补记：design.md §2.1 的 kind 判别标签与既有 TableKind（'pipe'|'html'）撞名，实施前需先做封闭在表格路径内的机械改名
+- 可复现性存档：探针插件、门禁 fixture、被引用的截图、CDP 探针脚本原在被 gitignore 覆盖的路径下（spike-vault/、.shots/、.scratch/），已收进 spikes/ 并互相改指；根目录 main.js 忽略规则锚定为 /main.js，避免归档的探针 main.js 被静默吞掉
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `87800c4` | docs(task): 引用块渲染与嵌套块缩进的规划、研究与门禁结论 |
+
+### Testing
+
+- [OK] node scripts/acceptance.mjs —— AC1–AC13 仍 13/13（本次无产品代码改动，基线未动）
+- [OK] 门禁 spike 0.1：widget 计数恒为 1，字面围栏/管道/标题/列表行数全为 0，三种时机稳定
+- [OK] 门禁 spike 0.2：4/4 时机无漂移；原生语法高亮、语言标签、折叠指示器未受损
+
+### Status
+
+[..] **规划完成，实施未开始** —— 本次交付的是规划与门禁结论，产品代码零改动。
+`task.json` 状态仍为 `planning`，未执行 `task.py start`。
+
+### Next Steps
+
+- **实施未开始**，下一步是阶段 1，不是收尾
+- 下次从 implement.md 阶段 1 起：先做 kind→tableKind 改名，再泛化 region 模型（唯一一次动既有成功路径，阶段末是强回滚点）
+- 阶段 2 引用块渲染 → 阶段 3 缩进对齐 → 阶段 4 护栏收尾
+- 缺一张证据：门禁 0.1 的 AFTER 态截图漏拍，重跑时顺手补拍（BEFORE 态见 spikes/shots/probe4.png）
