@@ -3,7 +3,7 @@
   "name": "block-render-table-edit",
   "title": "列表内嵌块渲染与可编辑表格",
   "description": "在保留 md 为唯一真相的前提下，为 Obsidian 增强列表嵌套块的渲染与表格的可视化编辑",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": null,
@@ -11,16 +11,18 @@
   "creator": "evans",
   "assignee": "evans",
   "createdAt": "2026-09-16",
-  "completedAt": null,
-  "branch": null,
+  "completedAt": "2026-10-10",
+  "branch": "main",
   "base_branch": "main",
   "worktree_path": null,
-  "commit": null,
+  "commit": "ffcf7cb7077d3abc262f048d5365752114aab408",
   "pr_url": null,
   "subtasks": [],
   "children": [],
   "parent": null,
   "relatedFiles": [],
   "notes": "",
-  "meta": {}
+  "meta": {
+    "commit": "ffcf7cb7077d3abc262f048d5365752114aab408"
+  }
 }
