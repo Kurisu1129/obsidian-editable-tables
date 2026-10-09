@@ -95,6 +95,16 @@
   align-items: center;
   gap: 0;
   padding: 1px 3px;
+  /*
+   * Narrow-pane fallback. The toolbar is ~380px wide and anchored by its right edge,
+   * so in a pane narrower than that it would overflow past the widget's LEFT edge —
+   * where `contain: paint` (see the CONSTRAINT note above) clips it away, leaving the
+   * leading buttons unreachable with no scrollbar to hint at them. Wrapping keeps every
+   * button clickable at the cost of a second row. Only engages below ~380px.
+   */
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: calc(100% - 2px);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-s, 4px);
   background-color: var(--background-secondary);
