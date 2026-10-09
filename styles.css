@@ -1,0 +1,144 @@
+/* Editable Tables — Live Preview table widget styling.
+ *
+ * Rather than hand-rolling table metrics, the widget root carries Obsidian's own
+ * `markdown-rendered` class. That opts our <table> into Obsidian's canonical
+ * table rules (`.markdown-rendered table|td|th`), which are driven by the
+ * `--table-*` CSS variables — so borders, padding, header weight, line-height
+ * and column sizing follow the active theme and Obsidian's own version.
+ *
+ * Measured against the native widget at runtime; see research/spike-cdp-findings.md.
+ * Goal: parity with the native renderer this plugin replaces (AC4). */
+
+.mdft-table {
+  /* display:block (never `contents`) — a 0x0 host breaks CodeMirror's heightmap
+     and makes the caret land several lines off. See research/obsidian-live-preview-api.md */
+  display: block;
+  position: relative;
+  /*
+   * `markdown-rendered` (below) brings `contain: paint`, which makes this element its
+   * own stacking context. Without a z-index here, the widget as a whole still sits at
+   * `z-index: auto` and the following `.cm-line` siblings — which are `position:
+   * relative` — paint over it, clipping the hover toolbar. A positive z-index lifts the
+   * whole widget (and its overflowing toolbar) above those siblings.
+   */
+  z-index: 1;
+  margin: 0;
+  padding: 0;
+}
+
+/* Carries Obsidian's `markdown-rendered` table rules. */
+.mdft-table__body {
+  display: block;
+}
+
+/*
+ * CONSTRAINT — the toolbar lives INSIDE the widget's box, and cannot be moved out.
+ *
+ * Obsidian clips every non-editable block widget, deliberately and with `!important`:
+ *   .markdown-source-view.mod-cm6 .cm-content > [contenteditable="false"] { contain: paint !important }
+ * A `contain: none` override loses to it, and escalating with our own `!important` would
+ * be an arms race against an intentional host guarantee. So the toolbar is positioned
+ * within the widget's own bounds instead of floating above the table.
+ *
+ * This matches how Obsidian's own table widget solves the same problem: its row/column
+ * drag handles live inside the cells, not outside the block.
+ */
+
+.mdft-table table {
+  /* Reading view adds paragraph spacing around tables; inside the editor that
+     would double up with the line's own spacing. Native uses margin: 0. */
+  margin: 0;
+  /* Native sizes columns to their content instead of filling the line. */
+  width: auto;
+  table-layout: auto;
+}
+
+/* Cell padding is carried by an inner wrapper (mirroring Obsidian's own
+   `.table-cell-wrapper`) so that empty cells keep a stable row height.
+   Class count beats `.markdown-rendered td` on specificity. */
+.mdft-table td.mdft-cell,
+.mdft-table th.mdft-cell {
+  padding: 0;
+  white-space: normal;
+}
+
+.mdft-cell-wrapper {
+  display: block;
+  padding: var(--size-2-2, 4px) var(--size-4-2, 8px);
+  white-space: var(--table-white-space, break-spaces);
+  overflow-wrap: break-word;
+  /* Cells are contenteditable, but keep the caret from looking like a text field. */
+  cursor: text;
+}
+
+.mdft-cell-wrapper:focus {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: -2px;
+  border-radius: 2px;
+}
+
+.mdft-cell.mdft-selected {
+  background-color: var(--table-selection, var(--text-selection, rgba(120, 120, 255, 0.25)));
+}
+
+/* ------------------------------------------------------------------- toolbar */
+
+.mdft-toolbar {
+  display: none;
+  position: absolute;
+  /* Anchored to the widget's own top-right corner — see the CONSTRAINT note above.
+     Revealed only on hover/focus, so it overlays the table's top edge rather than
+     displacing it. */
+  top: 1px;
+  right: 1px;
+  z-index: 2;
+  align-items: center;
+  gap: 0;
+  padding: 1px 3px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s, 4px);
+  background-color: var(--background-secondary);
+  box-shadow: var(--shadow-s, 0 1px 4px rgba(0, 0, 0, 0.2));
+  white-space: nowrap;
+}
+
+.mdft-table:hover .mdft-toolbar,
+.mdft-table:focus-within .mdft-toolbar {
+  display: flex;
+}
+
+.mdft-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: var(--font-ui-smaller, 12px);
+  line-height: 1;
+  padding: 4px 5px;
+  border-radius: var(--radius-s, 4px);
+  cursor: pointer;
+}
+
+.mdft-btn:hover:not(:disabled) {
+  background-color: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.mdft-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.mdft-btn.is-active {
+  color: var(--text-accent);
+  background-color: var(--background-modifier-hover);
+}
+
+.mdft-sep {
+  display: inline-block;
+  width: 1px;
+  height: 14px;
+  margin: 0 2px;
+  background-color: var(--background-modifier-border);
+}

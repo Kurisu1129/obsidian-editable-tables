@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/09-16-block-render-table-edit/research/obsidian-live-preview-api.md", "reason": "CM6 接入方式（registerEditorExtension）、Decoration 四类型与 ViewPlugin/StateField 选择规则、block widget + 嵌套编辑器同步要点、高度同步的具体坑位（display:contents 导致 0×0、必须 display:block + padding）、GitHub 对 colspan/rowspan 的白名单行为。实现阶段的核心技术依据"}
+{"file": ".trellis/tasks/09-16-block-render-table-edit/research/spike-cdp-findings.md", "reason": "真实 Obsidian 运行时的实测基线：嵌套表格零渲染且原生命令返回 false、顶层表格渲染为 cm-table-widget、原生 editor:table-* 命令全部可用且自动重排对齐。同时含测试 vault 路径与 CDP 验证通道（%TEMP%\\cdp.mjs）—— 阶段 0.5 门禁与后续所有验收都依赖它"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "本任务的数据流横跨三层：md 源文本 ↔ TableGrid 模型 ↔ 渲染 DOM。已知缺陷（缩进上下文丢失、高度失准导致光标偏移）全部是层边界 bug，开工前先过一遍该指南"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "表格 widget 与单元格编辑已有成熟参考实现（@markwhen/codemirror-tables 源自 Joplin、glifox/gnosis），应先评估复用其模式再决定自研范围，避免重复实现"}

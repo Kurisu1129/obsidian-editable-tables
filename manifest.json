@@ -1,0 +1,9 @@
+{
+  "id": "editable-tables",
+  "name": "Editable Tables",
+  "version": "0.1.0",
+  "minAppVersion": "1.7.0",
+  "description": "把 Live Preview 中的表格渲染为可编辑网格：支持列表项内嵌表格、单元格原地编辑、增删行列、合并拆分单元格。",
+  "author": "evans",
+  "isDesktopOnly": true
+}

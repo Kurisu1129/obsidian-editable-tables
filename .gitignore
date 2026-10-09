@@ -1,0 +1,14 @@
+node_modules/
+main.js
+*.js.map
+.DS_Store
+
+# Local verification artefacts
+.shots/
+
+# Test vault: Obsidian's own mutable state, not project source
+spike-vault/.obsidian/workspace.json
+spike-vault/.obsidian/workspace-mobile.json
+spike-vault/.obsidian/cache
+spike-vault/.obsidian/plugins/
+spike-vault/*.md
