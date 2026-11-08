@@ -41,7 +41,21 @@
 
 callout（`> [!note]`）仍然交给 Obsidian 原生渲染，见「已知边界」。
 
-## 安装（开发）
+## 安装
+
+### 手动安装
+
+1. 构建（或从 release 下载 `main.js`、`manifest.json`、`styles.css`）：
+
+```bash
+npm install
+npm run build
+```
+
+2. 把 `main.js`、`manifest.json`、`styles.css` 复制到 `<vault>/.obsidian/plugins/editable-tables/`。
+3. 在 Obsidian「设置 → 第三方插件」中启用 **Editable Tables**。
+
+### 开发调试
 
 ```bash
 npm install
@@ -49,7 +63,7 @@ npm run build
 ./scripts/deploy.sh /path/to/your/vault    # 默认部署到 ./spike-vault
 ```
 
-然后在 Obsidian 中启用 **Editable Tables**。
+发布到社区列表后，也可以通过 BRAT 或「浏览」市场安装。发布流程见 [RELEASE.md](RELEASE.md)。
 
 ## 存储格式：优先 Markdown，合并时才用 HTML
 
