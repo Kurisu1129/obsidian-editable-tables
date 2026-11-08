@@ -152,3 +152,25 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 5: 引用块内表格可编辑
+<!-- trellis-session: v=2 fp=83ff072bce72f59c -->
+
+**Date**: 2026-11-08
+**Task**: 引用块内表格可编辑
+**Branch**: `main`
+
+### Summary
+
+引用块渲染完成后，把 MarkdownRenderer 产出的 <table> 与剥离 > 链后扫描到的表格按顺序配对，用与正文共享的 TableEditor 原地替换；写回仍只经 commitGrid，indent 为行首前缀（> / '  > ' / '> > ' / '>   '），每次写盘前用 posAtDOM 重解析偏移；配对数量或形状不符则整块保持只读。新增 model/innerTable.ts + 10 个单测，抽出 widget/tableEditor.ts，AC29–AC33 用 CDP 真实鼠标验证，34/34 验收、73/73 单测。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `674f850` | feat: 引用块内表格升级为可编辑表格 |
+
+### Status
+
+[OK] **Completed**
