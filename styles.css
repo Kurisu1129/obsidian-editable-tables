@@ -152,3 +152,20 @@
   margin: 0 2px;
   background-color: var(--background-modifier-border);
 }
+
+/* ------------------------------------------------------------------ quote widget */
+
+/*
+ * A blockquote taken over by the plugin. The widget is a `.cm-content` direct child, so
+ * it starts at the content's left edge; `applyBlockIndent` adds `padding-left` when the
+ * quote is nested in a list item (AC17).
+ */
+.mdft-quote {
+  display: block;
+}
+
+/* The renderer's output already lives inside a blockquote; drop the outer margins so the
+   widget's height is exactly its content and the heightmap stays accurate (AC20). */
+.mdft-quote__body > blockquote {
+  margin-block: 0;
+}

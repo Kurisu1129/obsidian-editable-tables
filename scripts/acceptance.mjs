@@ -77,6 +77,12 @@ async function openFile(path, source) {
         : ''
     }
 
+    // A reopened file restores its previous scroll position, and CM6 only renders the
+    // viewport. Callers that measure the whole fixture need it rendered from the top.
+    const cmEl = app.workspace.activeLeaf.view.editor.cm;
+    if (cmEl?.scrollDOM) cmEl.scrollDOM.scrollTop = 0;
+    await sleep(400);
+
     await sleep(800);
     const el = app.workspace.activeLeaf.view.editor.cm.contentDOM;
     return JSON.stringify({
@@ -278,7 +284,7 @@ async function openFile(path, source) {
       const el = cm.contentDOM;
       const lines = [...el.querySelectorAll('.cm-line')].map((l) => {
         const r = l.getBoundingClientRect();
-        return { text: l.textContent.slice(0, 20), top: Math.round(r.top), h: Math.round(r.height) };
+        return { text: l.textContent.slice(0, 20), top: Math.round(r.top), h: Math.round(r.height), left: Math.round(r.left) };
       });
       const widget = el.querySelector('.mdft-table');
       const wr = widget ? widget.getBoundingClientRect() : null;
@@ -298,10 +304,13 @@ async function openFile(path, source) {
   const gap = below ? below.top - geo.widgetBottom : null;
 
   if (target) {
+    // Click inside the text column (the line's own left edge), not at the editor's left
+    // edge: that area is the gutter/padding and a mousedown there never reaches the
+    // content, leaving the selection at position 0 while the test looks like a height bug.
     const y = target.top + Math.round(target.h / 2);
     for (const type of ['mousePressed', 'mouseReleased']) {
       await client.send('Input.dispatchMouseEvent', {
-        type, x: geo.left + 40, y, button: 'left', clickCount: 1, buttons: type === 'mousePressed' ? 1 : 0,
+        type, x: target.left + 8, y, button: 'left', clickCount: 1, buttons: type === 'mousePressed' ? 1 : 0,
       });
       await sleep(80);
     }
@@ -553,6 +562,532 @@ async function openFile(path, source) {
     '工具栏操作不丢弃未提交的单元格输入，且两者同时落盘',
     kept && grew,
     `输入保留=${kept} 新行已插入=${grew}\n${detail.doc ?? detail.error}`,
+  );
+}
+
+// ---------------------------------------------------------------- AC14 / AC15 / AC16
+
+/** Top-level quote containing every block kind the PRD calls out. */
+const QUOTE_SRC = [
+  '# 引用块',
+  '',
+  '> 引用第一行',
+  '>',
+  '> ## 引用内标题',
+  '>',
+  '> | 甲 | 乙 |',
+  '> | --- | --- |',
+  '> | 1 | 2 |',
+  '>',
+  '> ```js',
+  '> const inQuote = 1;',
+  '> ```',
+  '>',
+  '> - 列表项 x',
+  '> - 列表项 y',
+  '',
+  'after',
+  '',
+].join('\n');
+
+{
+  await openFile('fx-quote-basic.md', QUOTE_SRC);
+  const d = JSON.parse(
+    await evaluate(`(() => {
+      const el = app.workspace.activeLeaf.view.editor.cm.contentDOM;
+      const q = el.querySelector('.mdft-quote');
+      const body = q ? q.querySelector('.mdft-quote__body') : null;
+      const literal = [...el.querySelectorAll('.cm-line')].map((l) => l.textContent).join(' ');
+      const fence = String.fromCharCode(96).repeat(3);
+      return JSON.stringify({
+        quotes: el.querySelectorAll('.mdft-quote').length,
+        blockquote: !!body && !!body.querySelector('blockquote'),
+        table: !!body && !!body.querySelector('blockquote table'),
+        heading: body && body.querySelector('blockquote h2') ? body.querySelector('blockquote h2').textContent : null,
+        listItems: body ? body.querySelectorAll('blockquote ul li').length : 0,
+        code: !!body && !!body.querySelector('blockquote pre code.language-js'),
+        ownTableInside: !!body && !!body.querySelector('.mdft-table'),
+        literalFence: literal.indexOf(fence + 'js') >= 0,
+        literalPipe: literal.indexOf('| --- |') >= 0,
+      });
+    })()`),
+  );
+  record(
+    'AC14',
+    '引用块内的表格渲染为 <table>，不再是管道源码',
+    d.quotes === 1 && d.blockquote && d.table && !d.literalPipe && !d.ownTableInside,
+    JSON.stringify(d),
+  );
+  record(
+    'AC15',
+    '引用块内的围栏代码块渲染，字面围栏行不再出现',
+    d.code && !d.literalFence,
+    JSON.stringify(d),
+  );
+  record(
+    'AC16',
+    '引用块内的标题与列表不再显示标记符源码',
+    d.heading === '引用内标题' && d.listItems === 2,
+    JSON.stringify(d),
+  );
+}
+
+// ---------------------------------------------------------------- AC18 / AC22
+
+{
+  const d = JSON.parse(
+    await evaluate(`(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const leaf = app.workspace.activeLeaf;
+      const cm = leaf.view.editor.cm;
+      const el = cm.contentDOM;
+      const snap = () => ({
+        widgets: el.querySelectorAll('.mdft-quote').length,
+        quoteLines: el.querySelectorAll('.cm-line.HyperMD-quote').length,
+      });
+      const out = { initial: snap() };
+
+      // Enter the quote (line 3 is its first line).
+      cm.dispatch({ selection: { anchor: cm.state.doc.line(3).from + 2 } });
+      await sleep(400);
+      out.inside = snap();
+
+      // Leave.
+      cm.dispatch({ selection: { anchor: 0 } });
+      await sleep(500);
+      out.left = snap();
+
+      // Edit outside the quote.
+      cm.dispatch({ changes: { from: 0, insert: 'x' } });
+      await sleep(400);
+      out.afterEdit = snap();
+      cm.dispatch({ changes: { from: 0, to: 1, insert: '' } });
+      await sleep(400);
+      out.afterEditUndo = snap();
+
+      // Switch away and back.
+      await app.workspace.getLeaf(false).openFile(app.vault.getAbstractFileByPath('top-level.md'));
+      await sleep(900);
+      await app.workspace.getLeaf(false).openFile(app.vault.getAbstractFileByPath('fx-quote-basic.md'));
+      await sleep(1200);
+      out.back = snap();
+      return JSON.stringify(out);
+    })()`),
+  );
+  const ok =
+    d.initial.widgets === 1 &&
+    d.inside.widgets === 0 &&
+    d.inside.quoteLines > 0 &&
+    d.left.widgets === 1 &&
+    d.afterEdit.widgets === 1 &&
+    d.afterEditUndo.widgets === 1 &&
+    d.back.widgets === 1;
+  record('AC18', '引用块接管在三种时机下稳定，光标进出还原/重渲染', ok, JSON.stringify(d));
+}
+
+{
+  const d = JSON.parse(
+    await evaluate(`(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      await app.workspace.getLeaf(false).openFile(app.vault.getAbstractFileByPath('fx-quote-basic.md'));
+      await sleep(1300);
+      const view = app.workspace.activeLeaf.view;
+      const cm = view.editor.cm;
+      const el = cm.contentDOM;
+      const file = app.vault.getAbstractFileByPath('fx-quote-basic.md');
+      const before = await app.vault.read(file);
+      const line = cm.state.doc.line(3);
+
+      cm.dispatch({ selection: { anchor: line.from + 2 } });
+      await sleep(400);
+      const insideWidgets = el.querySelectorAll('.mdft-quote').length;
+
+      cm.dispatch({ changes: { from: line.from + 2, insert: '★' } });
+      await sleep(400);
+      cm.dispatch({ selection: { anchor: 0 } });
+      await sleep(300);
+
+      const q = el.querySelector('.mdft-quote');
+      const rendered = q ? q.textContent : '';
+      const after = await app.vault.read(file);
+      const result = {
+        insideWidgets,
+        outWidgets: el.querySelectorAll('.mdft-quote').length,
+        markerRendered: rendered.indexOf('★') >= 0,
+        diskUnchanged: after === before,
+      };
+
+      // Restore the fixture so later checks see the original text.
+      view.editor.setValue(before);
+      await sleep(700);
+      return JSON.stringify(result);
+    })()`),
+  );
+  record(
+    'AC22',
+    '光标进入引用块可编辑源码，离开后重渲染且渲染路径不改写磁盘',
+    d.insideWidgets === 0 && d.outWidgets === 1 && d.markerRendered && d.diskUnchanged,
+    JSON.stringify(d),
+  );
+}
+
+// ---------------------------------------------------------------- AC17 / AC17b / AC17c
+
+const INDENT_SRC = [
+  '# 缩进',
+  '',
+  '- 一级项',
+  '',
+  '  > 引用在一级项里',
+  '  > 第二行',
+  '',
+  '  | t1 | t2 |',
+  '  | --- | --- |',
+  '  | 1 | 2 |',
+  '',
+  '  一级项里的正文',
+  '',
+  '  ```js',
+  '  const level1 = 1;',
+  '  ```',
+  '',
+  '  - 二级项',
+  '',
+  '    > 引用在二级项里',
+  '',
+  '    | t3 | t4 |',
+  '    | --- | --- |',
+  '    | 3 | 4 |',
+  '',
+  '    二级项正文',
+  '',
+  '    ```js',
+  '    const level2 = 2;',
+  '    ```',
+  '',
+  // A block that follows a *sub-item* inside its parent. Walking backwards from the block
+  // reaches the sub-item first; using it as the anchor would over-indent by one level.
+  // The owner must still be resolved as the parent (content column 2, not 4).
+  '- 父项A',
+  '',
+  '  - 子项A',
+  '',
+  '  > 子项之后的引用',
+  '  > 第二行',
+  '',
+  '  ```js',
+  '  const afterSub = 1;',
+  '  ```',
+  '',
+  '- 顶层后的列表',
+  '',
+  '顶层表',
+  '',
+  '| top | t |',
+  '| --- | --- |',
+  '| 0 | 0 |',
+  '',
+  '顶层代码块',
+  '',
+  '```js',
+  'const top = 0;',
+  '```',
+  '',
+].join('\n');
+
+/**
+ * Geometry of every block the PRD's AC17 names, measured with Range glyph boxes.
+ *
+ * The fixture is taller than the editor viewport, and CM6 only renders what is visible,
+ * so a single pass measures whichever half happens to be on screen. This walks the
+ * document in viewport-sized steps, accumulating a value for each element whenever it is
+ * rendered, then restores the scroll position. Values are taken last-wins: a code line can
+ * be measured in the same frame its indent decoration is applied, and the later reading
+ * is the settled one.
+ */
+const INDENT_PROBE = `async function collectIndent() {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const cm = app.workspace.activeLeaf.view.editor.cm;
+  const el = cm.contentDOM;
+  const out = {
+    contentLeft: +el.getBoundingClientRect().left.toFixed(2),
+    parent1: null, parent2: null, parentA: null,
+    quote1: null, quote2: null, quoteA: null,
+    table1: null, table2: null, tableTop: null,
+    code1: null, code2: null, codeA: null, codeTop: null,
+    codeTopMargin: null, quote1Pad: null, quote2Pad: null,
+    widgetOverCode: 0, flairs: 0,
+  };
+  const tokens = new Set();
+  const widgets = new Set();
+  const setNum = (key, v) => { if (typeof v === 'number') out[key] = v; };
+
+  const measure = () => {
+    const lines = [...el.querySelectorAll('.cm-line')];
+    const textLeft = (lineEl) => {
+      if (!lineEl) return null;
+      const walker = document.createTreeWalker(lineEl, NodeFilter.SHOW_TEXT);
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        const t = n.textContent || '';
+        if (!t.trim()) continue;
+        const p = n.parentElement;
+        if (p && p.closest('.cm-formatting, .code-block-flair, .cm-fold-indicator')) continue;
+        const i = t.search(/\\S/);
+        const r = document.createRange();
+        r.setStart(n, i);
+        r.setEnd(n, i + 1);
+        return +r.getBoundingClientRect().left.toFixed(2);
+      }
+      return null;
+    };
+    const itemLine = (needle) => lines.find((l) =>
+      l.classList.contains('HyperMD-list-line') &&
+      !l.classList.contains('HyperMD-list-line-nobullet') &&
+      l.textContent.includes(needle));
+    const left = (node) => (node ? +node.getBoundingClientRect().left.toFixed(2) : null);
+    const codeLine = (needle) => lines.find((l) =>
+      l.classList.contains('HyperMD-codeblock') && l.textContent.includes(needle));
+    const quote = (needle) => [...el.querySelectorAll('.mdft-quote')].find((n) => n.textContent.includes(needle));
+    const table = (needle) => [...el.querySelectorAll('.mdft-table')].find((n) => n.textContent.includes(needle));
+
+    setNum('parent1', textLeft(itemLine('一级项')));
+    setNum('parent2', textLeft(itemLine('二级项')));
+    setNum('parentA', textLeft(itemLine('父项A')));
+
+    const q1 = quote('引用在一级项里');
+    const q2 = quote('引用在二级项里');
+    const qa = quote('子项之后的引用');
+    setNum('quote1', left(q1 && q1.querySelector('blockquote')));
+    setNum('quote2', left(q2 && q2.querySelector('blockquote')));
+    setNum('quoteA', left(qa && qa.querySelector('blockquote')));
+    if (q1) { widgets.add('q1'); out.quote1Pad = getComputedStyle(q1).paddingLeft; }
+    if (q2) { widgets.add('q2'); out.quote2Pad = getComputedStyle(q2).paddingLeft; }
+    if (qa) widgets.add('qa');
+
+    const t1 = table('t1');
+    const t2 = table('t3');
+    const tt = table('top');
+    setNum('table1', left(t1 && t1.querySelector('table')));
+    setNum('table2', left(t2 && t2.querySelector('table')));
+    setNum('tableTop', left(tt && tt.querySelector('table')));
+    if (t1) widgets.add('t1');
+    if (t2) widgets.add('t2');
+    if (tt) widgets.add('tt');
+
+    setNum('code1', left(codeLine('const level1')));
+    setNum('code2', left(codeLine('const level2')));
+    setNum('codeA', left(codeLine('const afterSub')));
+    setNum('codeTop', left(codeLine('const top')));
+    const top = codeLine('const top');
+    if (top) out.codeTopMargin = getComputedStyle(top).marginLeft;
+
+    for (const needle of ['const level1', 'const level2', 'const afterSub', 'const top']) {
+      const line = codeLine(needle);
+      if (line && line.querySelector('.cm-keyword, .cm-def')) tokens.add(needle);
+    }
+    out.flairs = Math.max(out.flairs, el.querySelectorAll('.code-block-flair').length);
+
+    const wr = [...el.querySelectorAll('.mdft-table, .mdft-quote')].map((n) => n.getBoundingClientRect());
+    const cr = [...el.querySelectorAll('.cm-line.HyperMD-codeblock')].map((n) => n.getBoundingClientRect());
+    if (wr.some((a) => cr.some((b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom))) out.widgetOverCode = 1;
+  };
+
+  const saved = cm.scrollDOM.scrollTop;
+  for (let step = 0; step < 40; step++) {
+    measure();
+    const max = cm.scrollDOM.scrollHeight - cm.scrollDOM.clientHeight;
+    if (cm.scrollDOM.scrollTop >= max - 2) break;
+    cm.scrollDOM.scrollTop = Math.min(max, cm.scrollDOM.scrollTop + Math.floor(cm.scrollDOM.clientHeight * 0.7));
+    await sleep(250);
+  }
+  cm.scrollDOM.scrollTop = saved;
+  await sleep(300);
+  out.tokens = tokens.size;
+  out.widgets = widgets.size;
+  return JSON.stringify(out);
+}`;
+
+/**
+ * True when `a` sits on the same text column as `b` within subpixel tolerance.
+ *
+ * Lower bound alone is not enough: a block indented to the *sub-item* behind it would
+ * still be "not earlier". The upper bound is what distinguishes alignment with the
+ * owning item from over-indentation.
+ */
+const aligned = (a, b) => typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) <= 1;
+
+{
+  await openFile('fx-indent-list.md', INDENT_SRC);
+  const d = JSON.parse(await evaluate(`(${INDENT_PROBE})()`));
+  const ok =
+    aligned(d.quote1, d.parent1) &&
+    aligned(d.quote2, d.parent2) &&
+    aligned(d.table1, d.parent1) &&
+    aligned(d.table2, d.parent2) &&
+    aligned(d.code1, d.parent1) &&
+    aligned(d.code2, d.parent2) &&
+    aligned(d.quoteA, d.parentA) &&
+    aligned(d.codeA, d.parentA) &&
+    Math.abs(d.tableTop - d.contentLeft) < 1;
+  record(
+    'AC17',
+    '列表项内嵌的表格 / 引用块 / 原生代码块与父项正文对齐（含二级、子项之后）',
+    ok,
+    JSON.stringify(d),
+  );
+
+  const okNative =
+    d.widgets === 6 &&
+    d.widgetOverCode === 0 &&
+    d.tokens === 4 &&
+    d.flairs >= 1 &&
+    d.codeTopMargin === '0px';
+  record('AC17c', '代码块零接管：widget 数准确、不覆盖代码行、原生高亮/语言标签仍在、顶层未加缩进', okNative, JSON.stringify(d));
+
+  // AC17b: the same geometry must survive edits and a file switch.
+  const after = JSON.parse(
+    await evaluate(`(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const cm = app.workspace.activeLeaf.view.editor.cm;
+      cm.dispatch({ changes: { from: 0, insert: 'x' } });
+      await sleep(500);
+      const edited = JSON.parse(await (${INDENT_PROBE})());
+      cm.dispatch({ changes: { from: 0, to: 1, insert: '' } });
+      await sleep(500);
+      const undone = JSON.parse(await (${INDENT_PROBE})());
+      await app.workspace.getLeaf(false).openFile(app.vault.getAbstractFileByPath('fx-quote-basic.md'));
+      await sleep(900);
+      await app.workspace.getLeaf(false).openFile(app.vault.getAbstractFileByPath('fx-indent-list.md'));
+      await sleep(1400);
+      const back = JSON.parse(await (${INDENT_PROBE})());
+      return JSON.stringify({ edited, undone, back });
+    })()`),
+  );
+  const stable = [after.edited, after.undone, after.back].every(
+    (s) => aligned(s.code1, s.parent1) && aligned(s.code2, s.parent2) && aligned(s.table1, s.parent1)
+  );
+  record('AC17b', '行装饰缩进在编辑外围文本与切换文件后仍稳定', stable, JSON.stringify({
+    edited: { code1: after.edited.code1, code2: after.edited.code2, p1: after.edited.parent1, p2: after.edited.parent2 },
+    undone: { code1: after.undone.code1, code2: after.undone.code2 },
+    back: { code1: after.back.code1, code2: after.back.code2, p1: after.back.parent1, p2: after.back.parent2 },
+  }));
+}
+
+// ---------------------------------------------------------------- AC20
+
+{
+  const HEIGHT_SRC = [
+    '# 引用高度',
+    '',
+    '前文',
+    '',
+    '> 引用第一行',
+    '>',
+    '> 引用第二行',
+    '>',
+    '> | 甲 | 乙 |',
+    '> | --- | --- |',
+    '> | 1 | 2 |',
+    '',
+    '锚点甲',
+    '锚点乙',
+    '锚点丙',
+    '',
+  ].join('\n');
+
+  await openFile('fx-quote-height.md', HEIGHT_SRC);
+  const geo = JSON.parse(
+    await evaluate(`(() => {
+      const cm = app.workspace.activeLeaf.view.editor.cm;
+      const el = cm.contentDOM;
+      const widget = el.querySelector('.mdft-quote');
+      const wr = widget.getBoundingClientRect();
+      const lines = [...el.querySelectorAll('.cm-line')].map((l) => {
+        const r = l.getBoundingClientRect();
+        return { text: l.textContent.slice(0, 12), top: Math.round(r.top), h: Math.round(r.height), left: Math.round(r.left) };
+      });
+      const below = lines.find((l) => l.top >= wr.bottom - 2);
+      const target = lines.find((l) => l.text.includes('锚点乙'));
+      return JSON.stringify({
+        widgetBottom: Math.round(wr.bottom),
+        widgetHeight: Math.round(wr.height),
+        gap: below ? below.top - Math.round(wr.bottom) : null,
+        target,
+        left: Math.round(cm.dom.getBoundingClientRect().left),
+      });
+    })()`),
+  );
+
+  const hasTarget = geo.target;
+  if (hasTarget) {
+    const y = geo.target.top + Math.round(geo.target.h / 2);
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await client.send('Input.dispatchMouseEvent', {
+        type, x: geo.target.left + 8, y, button: 'left', clickCount: 1,
+        buttons: type === 'mousePressed' ? 1 : 0,
+      });
+      await sleep(80);
+    }
+    await sleep(400);
+  }
+  const landed = await evaluate(`(() => {
+    const cm = app.workspace.activeLeaf.view.editor.cm;
+    return cm.state.doc.lineAt(cm.state.selection.main.head).text;
+  })()`);
+  record(
+    'AC20',
+    '引用块与前后文本行的高度同步准确，点击落点与源码行一致',
+    !!hasTarget && Math.abs(geo.gap) <= 2 && landed.includes('锚点乙'),
+    `落点=${JSON.stringify(landed)} gap=${geo.gap}px height=${geo.widgetHeight}px`,
+  );
+}
+
+// ---------------------------------------------------------------- AC19
+
+{
+  const d = JSON.parse(
+    await evaluate(`(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const adapter = app.vault.adapter;
+      const ow = adapter.write.bind(adapter);
+      const ob = adapter.writeBinary.bind(adapter);
+      const touched = [];
+      adapter.write = (p, ...r) => { touched.push(p); return ow(p, ...r); };
+      adapter.writeBinary = (p, ...r) => { touched.push(p); return ob(p, ...r); };
+      try {
+        const top = app.vault.getAbstractFileByPath('fx-quote-basic.md');
+        await app.workspace.getLeaf(false).openFile(top);
+        await sleep(1200);
+        touched.length = 0;
+        const cm = app.workspace.activeLeaf.view.editor.cm;
+        cm.scrollDOM.scrollTop = 120; await sleep(300);
+        cm.scrollDOM.scrollTop = 0; await sleep(300);
+        await app.workspace.getLeaf(false).openFile(app.vault.getAbstractFileByPath('fx-indent-list.md'));
+        await sleep(1000);
+        await app.workspace.getLeaf(false).openFile(top);
+        await sleep(1000);
+        return JSON.stringify({ touched });
+      } finally {
+        adapter.write = ow;
+        adapter.writeBinary = ob;
+      }
+    })()`),
+  );
+  const notes = d.touched.filter((p) => !p.endsWith('workspace.json'));
+  record('AC19', '仅打开 / 滚动 / 切换文件时，引用块与嵌套块的笔记写入数为 0', notes.length === 0, JSON.stringify(d));
+}
+
+// ---------------------------------------------------------------- AC21
+
+{
+  const prior = ['AC1', 'AC2', 'AC3', 'AC4', 'AC5', 'AC6', 'AC7', 'AC8', 'AC9', 'AC10', 'AC11', 'AC12', 'AC13'];
+  const missing = prior.filter((id) => !results.some((r) => r.id === id));
+  const failed = prior.filter((id) => results.some((r) => r.id === id && !r.pass));
+  record(
+    'AC21',
+    '既有 AC1–AC13 全部仍然通过',
+    missing.length === 0 && failed.length === 0,
+    `missing=${missing.join(',') || 'none'} failed=${failed.join(',') || 'none'}`,
   );
 }
 

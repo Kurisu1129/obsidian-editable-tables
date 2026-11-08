@@ -58,7 +58,7 @@ export function commitGrid(view: EditorView, region: TableRegion, grid: TableGri
   const insert = serializeHtmlTable(grid, region.indent).join('\n');
   if (current === insert) return false; // no-op edits must not dirty the document
 
-  if (region.kind === 'pipe') discloseHtmlConversion();
+  if (region.tableKind === 'pipe') discloseHtmlConversion();
 
   view.dispatch({
     changes: { from: region.from, to: region.to, insert },

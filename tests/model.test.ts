@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { scanTableLines } from '../src/model/scan';
+import { scanFenceBlocks, scanTableLines } from '../src/model/scan';
+import { scanQuoteLines } from '../src/model/scanQuote';
 import { parsePipeTable, parseAlign, splitRow } from '../src/model/parsePipe';
 import { parseHtmlTable } from '../src/model/parseHtml';
 import { serializeHtmlTable, serializeHtmlTableString } from '../src/model/serializeHtml';
@@ -31,7 +32,7 @@ describe('scanTableLines', () => {
       lines('# H', '', '| a | b |', '| --- | --- |', '| 1 | 2 |', '', 'after'),
     );
     expect(blocks).toHaveLength(1);
-    expect(blocks[0]).toMatchObject({ startLine: 2, endLine: 4, kind: 'pipe', indent: '' });
+    expect(blocks[0]).toMatchObject({ startLine: 2, endLine: 4, tableKind: 'pipe', indent: '' });
   });
 
   it('finds a table nested under a list item and keeps its indent', () => {
@@ -39,7 +40,7 @@ describe('scanTableLines', () => {
       lines('- item', '  - sub', '', '    | a | b |', '    | --- | --- |', '    | 1 | 2 |', '', '  - next'),
     );
     expect(blocks).toHaveLength(1);
-    expect(blocks[0]).toMatchObject({ startLine: 3, endLine: 5, indent: '    ', kind: 'pipe' });
+    expect(blocks[0]).toMatchObject({ startLine: 3, endLine: 5, indent: '    ', tableKind: 'pipe' });
   });
 
   it('ignores pipe tables inside fenced code blocks', () => {
@@ -62,7 +63,7 @@ describe('scanTableLines', () => {
   it('finds an HTML table', () => {
     const blocks = scanTableLines(lines('# H', '', '<table>', '<tr><td>1</td></tr>', '</table>', ''));
     expect(blocks).toHaveLength(1);
-    expect(blocks[0]).toMatchObject({ startLine: 2, endLine: 4, kind: 'html' });
+    expect(blocks[0]).toMatchObject({ startLine: 2, endLine: 4, tableKind: 'html' });
   });
 
   it('ignores an unterminated HTML table', () => {
@@ -506,5 +507,100 @@ describe('html helpers', () => {
 
   it('strips tags and turns <br> into a newline', () => {
     expect(stripTags('a<br>b<strong>c</strong>')).toBe('a\nbc');
+  });
+});
+
+// ------------------------------------------------------------------ quotes
+
+describe('scanQuoteLines', () => {
+  it('finds a contiguous top-level quote, including blank > lines', () => {
+    const blocks = scanQuoteLines(lines('# H', '', '> a', '>', '> b', '', 'after'));
+    expect(blocks).toEqual([{ startLine: 2, endLine: 4, indent: '' }]);
+  });
+
+  it('keeps the indent of a quote nested in a list item', () => {
+    const blocks = scanQuoteLines(lines('- item', '  > a', '  > b', '', '- next'));
+    expect(blocks).toEqual([{ startLine: 1, endLine: 2, indent: '  ' }]);
+  });
+
+  it('treats a nested quote as one region', () => {
+    const blocks = scanQuoteLines(lines('> > inner', '> > more'));
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ startLine: 0, endLine: 1 });
+  });
+
+  it('absorbs a lazy continuation line after paragraph content', () => {
+    const blocks = scanQuoteLines(lines('> paragraph start', 'lazy continuation', '', 'outside'));
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ startLine: 0, endLine: 1 });
+  });
+
+  it('does not absorb a line after a heading inside the quote', () => {
+    const blocks = scanQuoteLines(lines('> ## heading', 'not lazy', ''));
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ startLine: 0, endLine: 0 });
+  });
+
+  it('ends the block at a blank line without >', () => {
+    const blocks = scanQuoteLines(lines('> a', '', 'still outside'));
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ startLine: 0, endLine: 0 });
+  });
+
+  it('ignores > inside fenced code', () => {
+    expect(scanQuoteLines(lines('```md', '> not a quote', '```'))).toHaveLength(0);
+  });
+
+  it('ignores > inside front matter', () => {
+    expect(scanQuoteLines(lines('---', 'title: > x', '---', '', 'body'))).toHaveLength(0);
+  });
+
+  it('leaves callouts to Obsidian', () => {
+    const blocks = scanQuoteLines(lines('> [!note] Title', '> body', '', '> plain quote'));
+    // The callout block is skipped; the following plain quote is still a region.
+    expect(blocks).toEqual([{ startLine: 3, endLine: 3, indent: '' }]);
+  });
+
+  it('leaves a nested callout to Obsidian', () => {
+    expect(scanQuoteLines(lines('> > [!note] Title', '> > body'))).toHaveLength(0);
+  });
+
+  it('leaves a callout after a blank > line to Obsidian', () => {
+    expect(scanQuoteLines(lines('>', '> [!note] Title', '> body'))).toHaveLength(0);
+  });
+
+  it('absorbs a lazy continuation even when it is less indented than the quote', () => {
+    // Obsidian marks such a line `HyperMD-quote-lazy`: laziness ignores container indent.
+    const blocks = scanQuoteLines(lines('- item', '  > quoted', 'outside', ''));
+    expect(blocks).toEqual([{ startLine: 1, endLine: 2, indent: '  ' }]);
+  });
+
+  it('absorbs a lazy continuation of a list item inside the quote', () => {
+    const blocks = scanQuoteLines(lines('> - item', '  continuation', ''));
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ startLine: 0, endLine: 1 });
+  });
+});
+
+describe('scanFenceBlocks', () => {
+  it('returns closed fences only', () => {
+    expect(scanFenceBlocks(lines('```js', 'x', '```', '', '~~~', 'y', '~~~'))).toEqual([
+      { startLine: 0, endLine: 2 },
+      { startLine: 4, endLine: 6 },
+    ]);
+    expect(scanFenceBlocks(lines('```js', 'unterminated'))).toEqual([]);
+  });
+
+  it('does not let a fence-looking line in front matter mask the body', () => {
+    const doc = lines('---', 'example: |', '  ```', '---', '', '| a | b |', '| --- | --- |', '| 1 | 2 |');
+    expect(scanFenceBlocks(doc)).toEqual([]);
+    expect(scanTableLines(doc)).toHaveLength(1);
+  });
+
+  it('does not close a long fence with a shorter one', () => {
+    const doc = lines('````md', '```', '> quoted', '````');
+    expect(scanFenceBlocks(doc)).toEqual([{ startLine: 0, endLine: 3 }]);
+    // The ``` and > lines are inside the fence, so neither can start a quote.
+    expect(scanQuoteLines(doc)).toHaveLength(0);
   });
 });

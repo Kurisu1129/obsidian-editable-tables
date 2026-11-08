@@ -1,11 +1,13 @@
 import { StateField, type EditorState, type Range } from '@codemirror/state';
 import { Decoration, EditorView, type DecorationSet } from '@codemirror/view';
 import { scanTableLines } from '../model/scan';
+import { scanQuoteLines } from '../model/scanQuote';
 import { parsePipeTable } from '../model/parsePipe';
 import { parseHtmlTable } from '../model/parseHtml';
 import type { TableGrid, TableKind } from '../model/types';
 import { TableWidget } from '../widget/tableWidget';
-import type { TableRegion } from './region';
+import { QuoteWidget } from '../widget/quoteWidget';
+import type { Region, TableRegion } from './region';
 
 type DecorationRange = Range<Decoration>;
 
@@ -31,34 +33,60 @@ function reportRefusal(kind: TableKind, firstLine: number, source: string): void
   );
 }
 
-/** Resolves every table block in the document to concrete offsets plus a parsed grid. */
-function buildRegions(state: EditorState): TableRegion[] {
+/** Resolves every renderable block in the document to concrete offsets. */
+function buildRegions(state: EditorState): Region[] {
   const lines: string[] = [];
   for (let i = 1; i <= state.doc.lines; i++) lines.push(state.doc.line(i).text);
 
-  const regions: TableRegion[] = [];
+  const regions: Region[] = [];
+
   for (const block of scanTableLines(lines)) {
     const from = state.doc.line(block.startLine + 1).from;
     const to = state.doc.line(block.endLine + 1).to;
     const blockLines = lines.slice(block.startLine, block.endLine + 1);
-    const grid = parseGrid(block.kind, blockLines);
+    const grid = parseGrid(block.tableKind, blockLines);
     if (!grid) {
-      reportRefusal(block.kind, block.startLine + 1, blockLines.join('\n'));
+      reportRefusal(block.tableKind, block.startLine + 1, blockLines.join('\n'));
       continue;
     }
     regions.push({
+      kind: 'table',
       from,
       to,
       indent: block.indent,
-      kind: block.kind,
+      tableKind: block.tableKind,
       grid,
+      source: state.doc.sliceString(from, to),
+    } satisfies TableRegion);
+  }
+
+  for (const block of scanQuoteLines(lines)) {
+    const from = state.doc.line(block.startLine + 1).from;
+    const to = state.doc.line(block.endLine + 1).to;
+    regions.push({
+      kind: 'quote',
+      from,
+      to,
+      indent: block.indent,
       source: state.doc.sliceString(from, to),
     });
   }
-  return regions;
+
+  // A `>` line inside an HTML table can be found by both scanners. Overlapping block
+  // replacements are not valid CM6 input, so keep the earlier region and drop the one it
+  // covers. (A table nested inside a blockquote is never produced by scanTableLines, so
+  // this only guards the reverse, unusual direction.)
+  regions.sort((a, b) => a.from - b.from);
+  const disjoint: Region[] = [];
+  for (const region of regions) {
+    const previous = disjoint[disjoint.length - 1];
+    if (previous && region.from < previous.to) continue;
+    disjoint.push(region);
+  }
+  return disjoint;
 }
 
-function selectionTouches(state: EditorState, regions: TableRegion[]): boolean {
+function selectionTouches(state: EditorState, regions: Region[]): boolean {
   for (const region of regions) {
     for (const range of state.selection.ranges) {
       if (range.from <= region.to && range.to >= region.from) return true;
@@ -67,7 +95,7 @@ function selectionTouches(state: EditorState, regions: TableRegion[]): boolean {
   return false;
 }
 
-function buildDecorations(state: EditorState, regions: TableRegion[]): DecorationSet {
+function buildDecorations(state: EditorState, regions: Region[]): DecorationSet {
   const ranges: DecorationRange[] = [];
 
   for (const region of regions) {
@@ -82,12 +110,9 @@ function buildDecorations(state: EditorState, regions: TableRegion[]): Decoratio
     }
     if (touched) continue;
 
-    ranges.push(
-      Decoration.replace({ widget: new TableWidget(region), block: true }).range(
-        region.from,
-        region.to,
-      ),
-    );
+    const widget =
+      region.kind === 'table' ? new TableWidget(region) : new QuoteWidget(region);
+    ranges.push(Decoration.replace({ widget, block: true }).range(region.from, region.to));
   }
 
   return Decoration.set(ranges, true);
@@ -95,21 +120,21 @@ function buildDecorations(state: EditorState, regions: TableRegion[]): Decoratio
 
 /**
  * Parsed regions. Recomputed only when the document changes — a cursor move must not
- * pay for re-scanning every table (AC8).
+ * pay for re-scanning every block (AC8).
  */
-const regionField = StateField.define<TableRegion[]>({
+const regionField = StateField.define<Region[]>({
   create: (state) => buildRegions(state),
   update: (regions, tr) => (tr.docChanged ? buildRegions(tr.state) : regions),
 });
 
-export const tableField = StateField.define<DecorationSet>({
+export const decorationField = StateField.define<DecorationSet>({
   create: (state) => buildDecorations(state, state.field(regionField)),
   update: (deco, tr) => {
     if (!tr.docChanged && !tr.selection) return deco;
 
     const regions = tr.state.field(regionField);
 
-    // Fast path: a selection move that stays clear of every table leaves the
+    // Fast path: a selection move that stays clear of every block leaves the
     // decoration set identical, so keep the existing one.
     if (!tr.docChanged) {
       const wasTouching = selectionTouches(tr.startState, regions);
@@ -122,4 +147,4 @@ export const tableField = StateField.define<DecorationSet>({
   provide: (f) => EditorView.decorations.from(f),
 });
 
-export const tableExtensionFields = [regionField, tableField];
+export const blockExtensionFields = [regionField, decorationField];

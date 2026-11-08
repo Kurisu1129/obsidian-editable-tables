@@ -30,7 +30,7 @@ function isDelimiterRow(text: string): boolean {
 }
 
 /** Index of the closing front-matter fence, or -1 when the document has no front matter. */
-function frontMatterEnd(lines: string[]): number {
+export function frontMatterEnd(lines: string[]): number {
   if (lines.length === 0 || lines[0].trim() !== '---') return -1;
   for (let i = 1; i < lines.length; i++) {
     const t = lines[i].trim();
@@ -75,30 +75,77 @@ function isHtmlTableEnd(text: string): boolean {
   return /<\/table>/i.test(text);
 }
 
-/** Marks lines that sit inside a fenced code block so they are never treated as tables. */
-function computeFenceMask(lines: string[]): boolean[] {
+/** A closed fenced code block, 0-indexed and inclusive of both fence lines. */
+export interface FenceBlock {
+  startLine: number;
+  endLine: number;
+}
+
+interface FenceInfo {
+  /** True for every line inside a fence, including the opening and closing fence lines. */
+  mask: boolean[];
+  blocks: FenceBlock[];
+}
+
+/**
+ * One pass over the document for every fence-derived fact the scanners need.
+ *
+ * The mask (for "never interpret this line as a table/quote") and the block list (for
+ * indenting native code blocks) must never disagree about what a fence is, so they are
+ * produced together rather than by two near-identical loops.
+ */
+function fenceInfo(lines: string[]): FenceInfo {
   const mask: boolean[] = new Array(lines.length).fill(false);
-  let fence: string | null = null;
-  for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(/^\s*(```+|~~~+)/);
+  const blocks: FenceBlock[] = [];
+  let fenceChar: string | null = null;
+  let fenceLen = 0;
+  let start = -1;
+
+  // Front matter is metadata, not content: a ``` inside it must not open a fence that
+  // masks the rest of the document (which would silently hide every table and quote).
+  const firstLine = Math.max(frontMatterEnd(lines) + 1, 0);
+
+  for (let i = firstLine; i < lines.length; i++) {
+    const m = lines[i].match(/^\s*(`{3,}|~{3,})(.*)$/);
     if (m) {
-      if (fence === null) {
-        fence = m[1][0];
+      if (fenceChar === null) {
+        fenceChar = m[1][0];
+        fenceLen = m[1].length;
+        start = i;
         mask[i] = true;
         continue;
       }
-      if (m[1][0] === fence) {
-        fence = null;
+      // A closing fence must use the same character, be at least as long as the opener,
+      // and carry no info string (CommonMark). Without the length check, a ``` inside a
+      // ```` block closes it early and everything after leaks out of the mask.
+      if (m[1][0] === fenceChar && m[1].length >= fenceLen && m[2].trim() === '') {
+        blocks.push({ startLine: start, endLine: i });
+        fenceChar = null;
+        fenceLen = 0;
+        start = -1;
         mask[i] = true;
         continue;
       }
     }
-    mask[i] = fence !== null;
+    mask[i] = fenceChar !== null;
   }
-  return mask;
+  return { mask, blocks };
 }
 
-function leadingWhitespace(text: string): string {
+/** Marks lines that sit inside a fenced code block so they are never treated as tables. */
+export function computeFenceMask(lines: string[]): boolean[] {
+  return fenceInfo(lines).mask;
+}
+
+/**
+ * Closed fenced code blocks. An unterminated fence yields no block: without an end line
+ * there is no range we could safely decorate.
+ */
+export function scanFenceBlocks(lines: string[]): FenceBlock[] {
+  return fenceInfo(lines).blocks;
+}
+
+export function leadingWhitespace(text: string): string {
   const m = text.match(/^[ \t]*/);
   return m ? m[0] : '';
 }
@@ -121,7 +168,7 @@ export function scanTableLines(lines: string[]): TableBlock[] {
       startLine: i,
       endLine: end,
       indent: leadingWhitespace(lines[i]),
-      kind: 'html',
+      tableKind: 'html',
     });
     i = end;
   }
@@ -150,7 +197,7 @@ export function scanTableLines(lines: string[]): TableBlock[] {
       startLine: start,
       endLine: end,
       indent: leadingWhitespace(lines[start]),
-      kind: 'pipe',
+      tableKind: 'pipe',
     });
     i = end;
   }

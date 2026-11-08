@@ -1,6 +1,7 @@
 import type { EditorView } from '@codemirror/view';
 import { WidgetType } from '@codemirror/view';
 import type { TableRegion } from '../editor/region';
+import { applyBlockIndent } from '../editor/indent';
 import { commitGrid } from '../editor/writeback';
 import {
   cloneGrid,
@@ -139,6 +140,9 @@ export class TableWidget extends WidgetType {
 
     wrap.replaceChildren(barEl, body);
     rememberSelection(view, this.region.from, state.sel);
+    // Unlike a `.cm-line`, a block widget inherits no list indentation; measure the
+    // owning item and pad the widget to match it (AC17).
+    applyBlockIndent(wrap, this.region.indent);
     return wrap;
   }
 

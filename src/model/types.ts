@@ -40,7 +40,12 @@ export interface TableBlock {
   endLine: number;
   /** Leading whitespace of the first line. MUST be reproduced byte-for-byte on write-back. */
   indent: string;
-  kind: TableKind;
+  /**
+   * The table's *storage flavour*. Named `tableKind` rather than `kind` because
+   * `kind` is the discriminator of the editor's Region union (see editor/region.ts):
+   * a region can be a table or a quote, and only tables have a `pipe`/`html` flavour.
+   */
+  tableKind: TableKind;
 }
 
 export function makeCell(text: string): Cell {
