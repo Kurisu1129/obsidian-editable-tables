@@ -35,8 +35,9 @@ cp -r .trellis/tasks/10-10-nested-block-quote-list/spikes/spike-probe \
 | 目录 | 内容 | 为什么存 |
 |---|---|---|
 | `fixtures/` | 两个门禁用的 fixture：`spike01.md`（引用块接管）、`spike02.md`（缩进行装饰）、`probe3.md` / `probe4.md`（研究阶段的对照与现状取证） | 原本在 `spike-vault/`，而 `spike-vault/*.md` 被 `.gitignore` 覆盖 —— 重建 vault 就丢了，门禁无法复现 |
-| `shots/` | 被 `research/` 文档引用的截图 + 一份说明 | 同上，原本在被排除的 `.shots/` 下 |
+| `shots/` | 被 `research/` 文档引用的截图 + 一份说明；`impl-indent.png` / `impl-quote.png` 是实施完成后的成品态取证（列表内嵌三类块对齐、引用块整段渲染） | 同上，原本在被排除的 `.shots/` 下 |
 | `research-probes/` | 研究阶段用过的 CDP 探针脚本 | 被 `research/` 文档引用，见其中 `README.md` |
+| `research-probes/phase4/` | 实施完成后补跑的三项验证：空列表项 / 长文档性能 / 引用块内链点击 | `implement.md` 阶段 4 的结论来源，见其中 `README.md` |
 
 **摆放回 vault**：把 `fixtures/*.md` 拷到 `spike-vault/` 根，`spike-probe/` 拷到
 `spike-vault/.obsidian/plugins/`，即恢复成门禁当时的现场。

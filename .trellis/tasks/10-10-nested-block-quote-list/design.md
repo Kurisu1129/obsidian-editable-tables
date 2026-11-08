@@ -232,13 +232,12 @@ MarkdownRenderer.render(app, region.source, host, sourcePath, comp)
 
 **回滚点**：阶段划分见 `implement.md`，每个阶段结束都是可回滚点。引用块路径与表格路径在 region 层共用、在 widget 层分离，**若要整体回退，只需让扫描器不产出 `quote` region**，表格能力不受影响。
 
-## 7. 待实施期确认
+## 7. 待实施期确认（已全部结案）
 
 1. ~~**D9 行装饰 spike**~~ —— **已通过**，结论见 `research/spike-0-findings.md`。缩进实现确定为 `margin-left: Npx !important` 的行装饰。
-2. **引用块 region 的边界穷举** —— 嵌套引用（`> > `）、列表内引用、lazy 续行、区间内空行的组合未穷举，实施时以 fixture 固定。
-3. **内链/嵌入点击** —— `MarkdownRenderer` 产物里的 `a.internal-link` 在 `ignoreEvent: true` 的 widget 内能否点击跳转，**未实测**。若不可用，需在 `ignoreEvent` 里放行链接点击；若放行后影响 CM6 选区，记为已知限制。
-4. **缩进量的取法仍需落地验证** —— spike 用的是写死的 40px 以确认技术可行；真实实现要「抄最近 `.HyperMD-list-line-N` 兄弟节点的 computed `padding-left`」，
-   这在**块是列表项第一个子块**（widget 前面没有可抄的列表行）等情形下的行为，见 `implement.md` 的 `fx-indent-blockonly.md`。
+2. ~~**引用块 region 的边界穷举**~~ —— **已覆盖**：`tests/model.test.ts` 的 `scanQuoteLines` 9 个用例（连续 / 列表缩进 / 嵌套 / lazy / 标题不吸收 / 空行结束 / 围栏排除 / front matter 排除 / callout 跳过），外加 AC14–AC16 的端到端 fixture。
+3. ~~**内链/嵌入点击**~~ —— **可用，无需特例**。实测结论见 `implement.md`「实施期补充结论」：`ignoreEvent: true` 只阻止 CM6 处理事件，宿主绑在 `a.internal-link` 上的处理器仍然生效，点击正常跳转；嵌入正常渲染。探针归档于 `spikes/research-probes/phase4/`。
+4. ~~**缩进量的取法**~~ —— **已落地并修正**。真实实现不抄 computed `padding-left`，而是用 `Range` 量父项第一个字形的实际 x（见 `editor/indent.ts`）；「块是列表项第一个子块」由 `spikes/research-probes/phase4/probe-blockonly.js` 验证。**实施期发现并修复的坑**：测量基准必须是内容区左边缘而非行自身矩形，否则行已带着上一次的 `margin-left` 时会算出 0，导致编辑后缩进消失（`editor/codeIndent.ts` 有注释固定这一点）。
 
 > spike 期间的踩坑（多 `.cm-editor` 实例、`Compartment` 默认值、探针代码热重载）见
 > `research/spike-0-findings.md` 末尾 —— 写验收脚本时会再遇到。

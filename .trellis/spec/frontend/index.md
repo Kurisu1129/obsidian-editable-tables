@@ -14,7 +14,7 @@
 
 | Guide | Description | Status |
 |-------|-------------|--------|
-| [CodeMirror Widgets](./codemirror-widgets.md) | 块级 widget 集成契约：`eq` / `ignoreEvent` / 高度同步 / 缓存重算 | ✅ 已沉淀 |
+| [CodeMirror Widgets](./codemirror-widgets.md) | 块级 widget 集成契约：`eq` / `ignoreEvent` / 高度同步 / 缓存重算；`MarkdownRenderer` 在 widget 内的三坑；行装饰补缩进 | ✅ 已沉淀 |
 | [Data Safety](./data-safety.md) | 与用户笔记的唯一接触点的写入契约 | ✅ 已沉淀 |
 | [Plugin Build](./obsidian-plugin-build.md) | 打包与生命周期约定：CM6 必须 external、版本对齐、插件不持久化启用 | ✅ 已沉淀 |
 | [Testing](./testing.md) | 两层测试约定 + 会制造假阴性的环境陷阱 | ✅ 已沉淀 |

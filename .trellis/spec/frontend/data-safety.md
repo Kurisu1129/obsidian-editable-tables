@@ -16,7 +16,7 @@
 export function commitGrid(view: EditorView, region: TableRegion, grid: TableGrid): void
 ```
 
-`TableRegion` 携带 `from` / `to` / `indent` / `kind` / `source`。
+`TableRegion` 携带 `from` / `to` / `indent` / `tableKind` / `source`（`kind: 'table'` 是判别联合的 tag，`tableKind` 才是 `'pipe' | 'html'` 的表格风味）。`Region` 联合里还有只读的 `QuoteRegion`（`kind: 'quote'`），**它不是合法的 `commitGrid` 入参** —— 类型系统在这一层就挡住"给引用块写盘"。
 
 ### 3. Contracts
 
@@ -28,6 +28,7 @@ export function commitGrid(view: EditorView, region: TableRegion, grid: TableGri
 | **偏移量必须新鲜** | `region` 是 widget 构造时的快照。其有效性由 `WidgetType.eq` 保证（见 `codemirror-widgets.md`）。 |
 | **读路径零写入** | 打开、滚动、切换文件**绝不**写盘。只有用户显式的编辑动作才写。 |
 | **渲染与落盘解耦** | 渲染某张表**不**意味着要改写它。只有被编辑过的表格才落盘。 |
+| **只读渲染不是写盘路径** | 引用块用 `MarkdownRenderer` 渲染（会加载嵌入、解析链接），但**渲染本身绝不触发任何写入**。不要为了"渲染得更完整"而加任何 fallback 写入或格式规整。 |
 | **退化必须可见** | 写出会损失表达力的格式（如把管道表格转成 HTML）时，必须明确告知用户，不得静默降级。 |
 
 ### 4. Validation & Error Matrix
@@ -38,6 +39,7 @@ export function commitGrid(view: EditorView, region: TableRegion, grid: TableGri
 | 无法忠实地解析该块 | 不渲染、不写盘，原样保留源码 |
 | 偏移量与文档不符 | 拒绝写入（由 `eq` 前置拦截；写盘处再加一道比对） |
 | 表格含列表类缩进 | 输出每行带原缩进前缀 |
+| 渲染引用块 / 光标进出 / 滚动 / 切换文件 | 零写入；渲染只产生 DOM |
 
 ### 5. Good / Base / Bad Cases
 
@@ -51,6 +53,7 @@ export function commitGrid(view: EditorView, region: TableRegion, grid: TableGri
 |---|---|
 | 块外内容不变 | 编辑表格中一个单元格，断言文档前缀与后缀**逐字节**相等 |
 | 只读零写入 | 包装 `app.vault.adapter.write` / `writeBinary` 计数，跑打开/滚动/切换后断言笔记文件写入数为 0 |
+| 引用块只读零写入 | 同上的包装手法，覆盖"含引用块 + 嵌套表格 + 内嵌代码块"的笔记，打开 / 滚动 / 切换一圈后笔记写入数为 0（AC19） |
 | 缩进保留 | 嵌套表格做一次结构操作，断言所有表格行仍以原缩进开头、列表标记完好 |
 | 不可解析即拒绝 | 未闭合的 `<table>`：断言 widget 数为 0 且文件内容不变 |
 | 不丢单元格 | 列数不一致的表格：断言每一行的每个单元格文本都还在 |

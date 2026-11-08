@@ -10,12 +10,11 @@
 | `spike02-none.png` | 门禁 0.2 基线：列表项内代码块，**背景盒恒为整行宽**、与项目符号左对齐 | `spike-0-findings.md` 的基线数字 376/392 |
 | `spike02-pad.png` | 门禁 0.2 反例：`padding-left` —— **文字右移了，背景盒没动** | 为什么 `padding-left` 判为「不足」 |
 | `spike02-margin.png` | 门禁 0.2 正例：`margin-left !important` —— 文字与**背景盒一起**右移 | 缩进实现最终选定这一种 |
+| `impl-quote.png` | **实施完成后的 AFTER 态**：`fx-quote-basic.md`，引用块整段渲染（表格 / 标题 / 代码 / 列表） | 补上门禁 0.1 缺失的 AFTER 截图（产品代码而非探针） |
+| `impl-indent.png` | 实施完成后的成品态：`fx-indent-list.md`，一级 / 二级列表项内的引用块、表格、代码块全部对齐父项正文 | AC17 的视觉取证 |
 
-## 缺一张
+## 关于门禁 0.1 的 AFTER 截图
 
-`spike-0-findings.md` 原本引用的 `spike01-quote-takeover.png`（引用块接管后的 AFTER 态）
-**实际没有落盘** —— 门禁 0.1 的当时只留存了计数与 DOM 断言，截图那一步没执行。
-门禁 0.1 的结论依据是断言数字（widget 数 1、字面围栏/管道/标题/列表行数全为 0），
-截图只是旁证，缺失不影响结论成立。**下次若要重跑 0.1，顺手补拍一张即可。**
-
-`probe4.png` 恰好是它**同一 fixture 的 BEFORE 态**，两张合起来本可构成对照。
+`spike-0-findings.md` 原本引用的 `spike01-quote-takeover.png` 当时没有落盘，只有计数与 DOM 断言。
+该缺口现由 `impl-quote.png` 实质补上 —— 同一接管机制、同一种 fixture 形态，只是跑在产品代码上。
+`probe4.png` 是同一现场的 **BEFORE** 态，两张合起来构成完整对照。

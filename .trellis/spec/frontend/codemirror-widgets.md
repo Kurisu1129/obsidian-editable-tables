@@ -177,3 +177,89 @@ destroy(dom) {
   observers.delete(dom);
 }
 ```
+
+---
+
+## Pattern：在 widget 内用 `MarkdownRenderer` 渲染整段 Markdown
+
+**场景**：引用块（blockquote）的渲染内容与 Obsidian 自己的阅读视图同构，与其自己写一个 Markdown 渲染器，不如直接调用宿主的 `MarkdownRenderer`。
+
+```ts
+const info = view.state.field(editorInfoField, false);   // 需要 app 与当前文件路径
+const comp = new Component();
+comp.load();
+MarkdownRenderer.render(info.app, markdown, body, info.file?.path ?? '', comp)
+  .then(() => { if (wrap.isConnected) view.requestMeasure(); })
+  .catch(() => { /* 降级为 <pre>，绝不能让异常穿出 toDOM */ });
+```
+
+**三个必须处理的坑**（每一个都可能静默损坏渲染结果）：
+
+| 坑 | 后果 | 处理 |
+|---|---|---|
+| **追加语义** | 渲染到非空容器会**叠加**一层内容，重渲染一次就重复一遍 | 渲染前 `body.replaceChildren()` |
+| **`Component` 生命周期** | 不传 `Component` 会 `console.error`，且嵌入内容的事件处理器不回收（泄漏） | 每个 widget 一个 `Component`，`toDOM` 里 `load()`，`destroy()` 里 `unload()` |
+| **异步** | `render` 返回 Promise；渲染前后高度不同，heightmap 失准 → 光标落点偏移数行 | Promise 完成后再 `requestMeasure()`；同时挂 `ResizeObserver`（图片/嵌入在 Promise 之后仍会改变高度） |
+
+**`ignoreEvent: true` 不等于"链接点不动"**：`ignoreEvent` 只决定 **CM6 是否处理** widget 内的事件，宿主 `MarkdownRenderer` 自己绑在 `a.internal-link` 上的点击处理器仍然生效。实测引用块 widget 内的 `[[笔记]]` 点击后正常跳转。所以不需要为了链接在 `ignoreEvent` 里写特例。
+
+**`destroy` 之后 Promise 可能才 resolve**：用一个 `WeakSet` 记录已销毁的根节点，回调里先检查 `isConnected`，避免对已脱离的 DOM 调 `requestMeasure`。
+
+**渲染前剥掉列表缩进**：列表项内的引用块源码带 4 空格缩进，直接交给 `MarkdownRenderer` 会被解析成**代码块**。按 `region.indent` 去掉行首缩进后再渲染。
+
+---
+
+## Pattern：用行装饰给原生块补缩进（不接管 DOM）
+
+**场景**：列表项内的围栏代码块由 Obsidian 原生渲染（高亮、语言标签、折叠都在），但它的 `.cm-line` 拿不到列表的 `padding-left`，左边缘贴到编辑区最左。既不想接管（会失去全部原生能力），又必须对齐。
+
+**解法**：加一条 `Decoration.line({ attributes: { style } })`，只改视觉，不碰 DOM 结构与渲染归属。
+
+```ts
+Decoration.line({
+  attributes: { style: `margin-left:${margin.toFixed(2)}px !important` },
+})
+```
+
+**为什么必须是 `margin-left` + `!important`**（三种写法只有一种合格，均实测）：
+
+| 写法 | 结果 |
+|---|---|
+| `padding-left: Npx` | 文字右移，**背景盒不动** —— 代码块的底色仍从最左边开始，视觉上不是"缩进" |
+| `position: relative; left: Npx` / `transform: translateX(Npx)` | 盒子整体右移但**右边缘溢出**，被宿主的 `contain: paint !important` 裁掉 |
+| `margin-left: Npx !important` | 整个行盒（文字 + 背景）一起右移，宽度自动收缩 —— **唯一合格** |
+
+`!important` 不可省：Obsidian 把 `.cm-line` 的 `margin: 0` 声明在 **CSS 级联层**里并带 `!important`，不带 `!important` 的内联样式会输给它，`getComputedStyle` 仍是 `0px`（属性写进去了，但没生效）。
+
+> **这是插件唯一允许对宿主使用 `!important` 的地方。**
+> 作用域仅限"列表项内代码块的行装饰"。**绝不能**把它扩展到 `contain: paint` ——
+> 那条规则是宿主对 widget 边界的刻意保证，对抗它只会让内容串到相邻行。
+
+**测量必须幂等**：用**内容区左边缘**（`view.contentDOM.getBoundingClientRect().left`）作为基准，不要用行自身的矩形。行此刻可能已经带着上一次加的 `margin-left`，用它自己的矩形相减会得到 0，下一次重建就把装饰丢了 —— 症状是"打完字缩进消失，只有部分层级残留"。
+
+**调度用 `queueMicrotask`，不用 `requestAnimationFrame`**：Chromium 在**非前台窗口**会节流甚至暂停 rAF。通过 CDP 驱动的 Obsidian 窗口经常不是前台窗口，rAF 方案会表现为"装饰永远不出现"。微任务在 dispatch 应用完 DOM 之后立即执行，是能测量几何的最早时机。
+
+**不要在 IME 组合期间 dispatch**：`view.composing` 为真时额外的事务可能提前结束组合输入。挂一次性的 `compositionend` 监听，组合结束后再重算。
+
+**重算必须自限**：插件自己 `dispatch({})` 会让 CM6 重新读取装饰。用"内容寻址"的 key（所有 `from:margin` 拼起来）比较，未变化就直接返回，否则会形成 dispatch → update → dispatch 的循环。
+
+## 依赖版本备注
+
+`@codemirror/view` 6.38 的 `view.domAtPos(pos)` **只接受一个参数**（旧的 `bias` 第二参已从类型里移除）。需要精确映射时改用 `view.posAtDOM(line, 0)` 反向校验。
+
+---
+
+## 验收脚本（CDP）的两个必踩坑
+
+**点击坐标必须落在 `.cm-content` 内**。`cm.dom.getBoundingClientRect().left` 是编辑器根的左边缘，包含了行号/折叠 gutter 和内容内边距（实测正文从 178px 开始，根在 44px）。在 `left + 40` 处 `dispatchMouseEvent` 命中的是 `.cm-scroller`，CM6 不处理，selection 停留在位置 0 —— 断言会报"点击落到第一行"，看起来像 widget 高度错误，实际是点击没进正文。用目标行自己的 `getBoundingClientRect().left + 8`。
+
+**CM6 只渲染视口**。`querySelectorAll('.mdft-table')` 只返回当前渲染的 widget；长 fixture 单次测量必然漏掉半页。测量脚本应：
+
+1. 按视口分步滚动，每步等待 ~250ms 让 CM6 完成 viewport 更新；
+2. 按**内容**（`textContent.includes(...)`）识别 widget，不要按索引 —— 视口变化时索引会移位；
+3. 每个值取"最后一次非空读数"：代码行的缩进装饰是在滚动后的微任务里才应用的，第一次读到可能是未装饰的值；
+4. 测完恢复原 `scrollTop`。
+
+**行装饰的断言要设上下界**。"不早于父项正文"只能排除贴左，无法排除缩进过头（例如按子项而非父项对齐）。用 `|a - b| <= 1px`，并专门放一个"块位于子项之后"的 fixture —— 那是唯一能暴露过度缩进的布局。
+
+**不要写结构上恒为假的选择器**。widget 是整行 replace，`'.cm-line.HyperMD-codeblock .mdft-table'` 永远为 0，断言等于没写。要证明"没接管代码块"，应断言 widget 矩形与代码行矩形**不相交**，并断言代码行仍有原生高亮节点。
