@@ -13,7 +13,17 @@
 ### 2. Signatures
 
 ```ts
-export function commitGrid(view: EditorView, region: TableRegion, grid: TableGrid): void
+export interface CommitOptions {
+  /** Explicit Markdown conversion (toolbar 转 MD); refuse instead of falling back to HTML. */
+  forcePipe?: boolean;
+}
+
+export function commitGrid(
+  view: EditorView,
+  region: TableRegion,
+  grid: TableGrid,
+  opts?: CommitOptions,
+): boolean
 ```
 
 `TableRegion` 携带 `from` / `to` / `indent` / `tableKind` / `source`（`kind: 'table'` 是判别联合的 tag，`tableKind` 才是 `'pipe' | 'html'` 的表格风味）。`Region` 联合里还有只读的 `QuoteRegion`（`kind: 'quote'`），**它不是合法的 `commitGrid` 入参** —— 类型系统在这一层就挡住"给引用块写盘"。
@@ -31,6 +41,10 @@ export function commitGrid(view: EditorView, region: TableRegion, grid: TableGri
 | **只读渲染不是写盘路径** | 引用块用 `MarkdownRenderer` 渲染（会加载嵌入、解析链接），但**渲染本身绝不触发任何写入**。不要为了"渲染得更完整"而加任何 fallback 写入或格式规整。 |
 | **引用块内的表格是唯一新增的写盘对象** | 引用里的表格升级为编辑器后，写回仍只经 `commitGrid`：范围是该表格的整行区间（含 `>` 前缀），`region.indent` 就是这段前缀，序列化时逐行复现。配对不成立（渲染表格数与扫描数不等、或形状不符）时整块保持只读，不猜范围。引用块的 `QuoteRegion` 本身依然不是合法的 `commitGrid` 入参。 |
 | **退化必须可见** | 写出会损失表达力的格式（如把管道表格转成 HTML）时，必须明确告知用户，不得静默降级。 |
+| **管道优先** | `tableKind === 'pipe'` 的表格，只要编辑后的网格仍可无损表示为 GFM 管道表格（无合并/跨行、有表头、单元格单行、无歧义的转义），就必须写回管道语法。HTML 只用于管道语法无法表达的结构。 |
+| **显式转换只进不退** | `forcePipe` 只由工具栏「转 MD」使用。网格不可表示时 `commitGrid` 返回 `false` 且不写盘；绝不静默退回 HTML。 |
+| **序列化保守** | `canSerializePipe` 拿不准就返回 `false`：反斜杠紧邻管道、raw HTML 内含管道、换行等一律拒绝。宁可多一张 HTML 表，也不写坏内容。 |
+| **导出只读** | Markdown 导出命令只读 `editor.getValue()`，结果进剪贴板或下载；不经 `commitGrid`，不产生任何 vault 写入。 |
 
 ### 4. Validation & Error Matrix
 
@@ -40,7 +54,11 @@ export function commitGrid(view: EditorView, region: TableRegion, grid: TableGri
 | 无法忠实地解析该块 | 不渲染、不写盘，原样保留源码 |
 | 偏移量与文档不符 | 拒绝写入（由 `eq` 前置拦截；写盘处再加一道比对） |
 | 表格含列表类缩进 | 输出每行带原缩进前缀 |
+| 网格仍可表示为管道表格 | 写回管道语法（不是 HTML） |
+| 网格含合并/跨行 | 写回 HTML，并按"退化必须可见"提示一次 |
+| 显式「转 MD」但网格不可表示 | 返回 `false`，文档不变 |
 | 渲染引用块 / 光标进出 / 滚动 / 切换文件 | 零写入；渲染只产生 DOM |
+| 执行 Markdown 导出命令 | 零写入（只读编辑器内容） |
 
 ### 5. Good / Base / Bad Cases
 
@@ -140,9 +158,9 @@ if (current !== region.source) return false;   // 坐标已失效，拒绝写入
 
 ## 已知的表达力代价
 
-把表格落盘为 HTML `<table>` 会带来两个**不可绕过**的后果（HTML 的格式约束）：
+管道表格在可表示时保持管道语法；只有合并 / 跨行等管道语法无法表达的结构才落盘 HTML `<table>`。HTML 表格带来两个**不可绕过**的后果（HTML 的格式约束）：
 
 1. 单元格内**不再解析 Markdown 行内格式**。
 2. 源码不再是管道表格。
 
-换取的是 `colspan` / `rowspan` 在 GitHub 等平台的白名单支持。这个取舍必须对用户可见。
+换取的是 `colspan` / `rowspan` 在 GitHub 等平台的白名单支持。这个取舍必须对用户可见；已经落盘的 HTML 表格可以用工具栏「转 MD」在可表示时转回 Markdown。

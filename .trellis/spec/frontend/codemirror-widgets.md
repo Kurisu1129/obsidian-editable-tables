@@ -311,3 +311,24 @@ CM6 只渲染视口。父项列表行完全可能不在 DOM 里，这时：
 | **引用文本交互与表格互斥** | 引用块的 `mousedown` / `dblclick` 判断必须把 `.mdft-table` 算作 interactive（`closest()` 选择器），否则单击单元格会触发引用块自己的坐标选字 / 进源码。`copy` 守卫要放行"原生选区位于内层 `contenteditable`"的复制；`selectionchange` 同理。坐标选字的字符遍历也要跳过 `.mdft-table` 内的文本节点（单元格内容会变，缓存的字符盒会失效）。 |
 
 **`MarkdownRenderer` 是阅读视图语义，比 Live Preview 的表格识别更严格**：表头行前必须有一个空行（引用里就是单独一行 `>`），否则整段渲染成普通段落、管道符原样显示。扫描器是行式的、更宽松，会看到渲染器没渲染的表格 —— 数量校验正是为此兜底（不一致 → 不升级，只读）。验收夹具必须按阅读视图的规则写，否则测的是"不升级"而不是"可编辑"。
+
+## Pattern：渲染层编辑、Markdown 落盘 + 导出
+
+**场景**：编辑器展示渲染层，但源文件必须始终是 Markdown；导出也要得到 Markdown。
+
+**五条契约**：
+
+| 契约 | 做法 |
+|---|---|
+| **写回格式由网格能力决定** | `canSerializePipe(grid)`（无合并/跨行、有表头、单元格单行、转义无歧义）→ `serializePipeTable`；否则 `serializeHtmlTable`。不要按"上次是什么格式"或用户偏好决定，否则同一张表会在两种存储之间反复横跳。 |
+| **显式转换要能失败** | 工具栏「转 MD」用 `forcePipe`；网格不可表示时 `commitGrid` 返回 `false` 且不写盘，不能静默退回 HTML。按钮的启用状态只是提示，真正的判定在写盘点。 |
+| **单元格先规范成单行** | blur 提交时把 `innerText` 的空白连跑折叠成一个空格并 trim；否则粘贴多行会拆散管道行，或把裸换行写进 `<td>`。序列化器仍要再拒绝一次换行作为兜底。 |
+| **导出复用扫描 + 序列化** | `exportMarkdown` 用同一套 `scanTableLines` / `scanQuoteLines` / `planInnerTables` / `canSerializePipe` / `serializePipeTable`。顶层的 HTML 表格与引用内 HTML 表格都要覆盖；围栏、front matter、callout 由扫描器自然排除。 |
+| **导出必须只读** | 命令只读 `editor.getValue()`；复制用 `navigator.clipboard.writeText`（失败退回 textarea + execCommand），文件用 Blob + `<a download>`。绝不走 `commitGrid` / `vault.modify`。 |
+
+**验收经验**：
+
+- 管道写回的断言要看**行首前缀 + 精确表格行**（`> | 甲 | 乙 |`），不能只断言"没有 `<table>`"—— 后者在写回失败、源码原样保留时也成立。
+- 工具栏按钮（如「转 MD」）的验收必须走真实鼠标 `mouseMoved` → `click`，因为工具栏只在 hover 时可见。
+- 导出验收替换 `navigator.clipboard` 的 `writeText` 与 `HTMLAnchorElement.prototype.click` 捕获结果，再 `fetch(blobUrl)` 读内容；不需要真的落文件，也不会污染 vault。
+- **这个 Electron 构建里 `navigator.clipboard.writeText` 是实例的自有属性**（`Object.hasOwn(clip, 'writeText') === true`），只改原型上的 `writeText` 不会拦截到任何调用，捕获结果永远是 `null`。补丁必须优先 `Object.defineProperty(clip, 'writeText', …)`，并为 `document.execCommand('copy')` 兜底路径也装一个桩。

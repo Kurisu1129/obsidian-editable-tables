@@ -1,4 +1,5 @@
 import type { EditorView } from '@codemirror/view';
+import { Notice } from 'obsidian';
 import type { TableRegion } from '../editor/region';
 import { applyBlockIndent } from '../editor/indent';
 import { commitGrid } from '../editor/writeback';
@@ -12,6 +13,7 @@ import {
   setColAlign,
   splitCell,
 } from '../model/grid';
+import { canSerializePipe } from '../model/serializePipe';
 import type { Align, TableGrid } from '../model/types';
 
 /** Inclusive cell rectangle, in logical grid coordinates. */
@@ -200,7 +202,12 @@ export class TableEditor {
     const cell = this.state.grid.cells[editing.r]?.[editing.c];
     if (!cell) return false;
 
-    const text = (editing.el.textContent ?? '').replace(/​/g, '').trim();
+    // Cells are single-line by construction. A paste can still introduce block
+    // boundaries (`innerText` reports them as newlines), which would split a pipe row
+    // or put a raw newline inside `<td>`; fold all whitespace runs into one space.
+    // `innerText` needs layout, so fall back to `textContent` when it yields nothing.
+    const raw = (editing.el.innerText || editing.el.textContent || '').replace(/​/g, '');
+    const text = raw.replace(/\s+/g, ' ').trim();
     if (cell.text === text && cell.raw === undefined) return false;
 
     cell.text = text;
@@ -342,6 +349,32 @@ export class TableEditor {
 
   // ------------------------------------------------------------------- toolbar
 
+  /**
+   * Explicit HTML → Markdown conversion (the toolbar's 转 MD action).
+   *
+   * Goes through the same `commitGrid` gate as every other action. `forcePipe` means
+   * "refuse rather than silently keep HTML": if the grid cannot be represented as a
+   * pipe table, the document is untouched and the user is told why.
+   */
+  private convertToMarkdown(): void {
+    this.foldPendingEdit();
+
+    if (!canSerializePipe(this.state.grid)) {
+      new Notice('这张表无法用管道语法表示（含合并单元格、无表头或多行内容），已保持 HTML。');
+      return;
+    }
+
+    const region = this.currentRegion();
+    if (!region) return;
+
+    if (!commitGrid(this.view, region, this.state.grid, { forcePipe: true })) {
+      new Notice('表格位置已变化，本次转换已取消。');
+      return;
+    }
+    new Notice('已转换为 Markdown 管道表格。');
+    this.view.focus();
+  }
+
   private buildToolbar(): HTMLElement {
     const view = this.view;
     const state = this.state;
@@ -437,6 +470,22 @@ export class TableEditor {
         : null,
     );
     add('拆分', '把合并的单元格拆开', () => apply((g) => splitCell(g, row(), col())));
+
+    // Only HTML-stored tables need this action: pipe tables already write back as
+    // Markdown whenever the grid allows it. A table that cannot be represented as a
+    // pipe table (merged cells, missing header, multi-line content) keeps HTML.
+    if (this.region.tableKind === 'html') {
+      sep();
+      const convertible = canSerializePipe(grid);
+      add(
+        '转 MD',
+        convertible
+          ? '用 Markdown 管道语法存储这张表（HTML → Markdown）'
+          : '这张表含合并单元格、无表头或多行内容，管道语法无法表示',
+        convertible ? () => this.convertToMarkdown() : null,
+      );
+    }
+
     sep();
 
     add('源码', '展开源码以便直接编辑 Markdown 文本', () => {

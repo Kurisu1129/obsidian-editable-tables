@@ -622,7 +622,13 @@ const MERGE_SRC = '# 表\n\n| 甲 | 乙 | 丙 |\n| --- | --- | --- |\n| 1 | 2 | 
     return app.workspace.activeLeaf.view.editor.getValue();
   })()`);
 
-  const structuralOk = typeof afterOp === 'string' && afterOp.includes('<table>');
+  // A pipe table stays pipe syntax, so a successful row insert shows up as one more
+  // `| … |` line (header + delimiter + two body rows).
+  const pipeRows =
+    typeof afterOp === 'string'
+      ? afterOp.split('\n').filter((l) => l.trim().startsWith('|')).length
+      : 0;
+  const structuralOk = pipeRows === 4;
   if (structuralOk) {
     await pressKey('z', 2, 'KeyZ', 90);
     const undone = await evaluate('app.workspace.activeLeaf.view.editor.getValue()');
@@ -705,7 +711,12 @@ const MERGE_SRC = '# 表\n\n| 甲 | 乙 | 丙 |\n| --- | --- | --- |\n| 1 | 2 | 
   );
 
   const kept = typeof detail.doc === 'string' && detail.doc.includes('临时输入');
-  const grew = typeof detail.doc === 'string' && (detail.doc.match(/<tr>/g) || []).length === 3;
+  const pipeRows =
+    typeof detail.doc === 'string'
+      ? detail.doc.split('\n').filter((l) => l.trim().startsWith('|')).length
+      : 0;
+  // Header + delimiter + two body rows: the pipe table is still Markdown.
+  const grew = pipeRows === 4;
   record(
     'AC13',
     '工具栏操作不丢弃未提交的单元格输入，且两者同时落盘',
@@ -1471,28 +1482,32 @@ async function quoteCellCenter(quoteText, row, col) {
   );
 
   const docLines = after.doc.split('\n');
-  const start = docLines.findIndex((l) => l.includes('<table>'));
-  const end = docLines.findIndex((l) => l.includes('</table>'));
-  const tableLines = start >= 0 && end > start ? docLines.slice(start, end + 1) : [];
-  const allPrefixed = tableLines.length > 0 && tableLines.every((l) => l.startsWith('> '));
+  const tableLines = docLines.filter((l) => l.startsWith('> |'));
+  const allPrefixed = tableLines.length === 3 && tableLines.every((l) => l.startsWith('> '));
+  // The source of truth stays Markdown: header + delimiter + the edited body row.
+  const markdownShape =
+    tableLines[0] === '> | 甲 | 乙 |' &&
+    tableLines[1] === '> | --- | --- |' &&
+    tableLines[2] === '> | 1 | 2改 |';
+  const noHtml = !after.doc.includes('<table>');
   const outsideIntact =
     after.doc.startsWith('# 引用内表格\n\n> 引用第一行\n') && after.doc.endsWith('\n\n后文\n');
 
   record(
     'AC29',
-    '引用块内表格渲染为可编辑表格：真实点击输入 + Enter 写回，每行保留 "> " 前缀',
+    '引用块内表格渲染为可编辑表格：真实点击输入 + Enter 后写回 Markdown 管道语法，每行保留 "> " 前缀',
     mounted.inner === 1 && mounted.tds === 2 && mounted.staticTables === 0 &&
       !!cell && focusState.inCell && /改/.test(focusState.text ?? '') &&
-      allPrefixed && tableLines.some((l) => l.includes('改')) &&
+      allPrefixed && markdownShape && noHtml &&
       outsideIntact && after.quotes === 1 && after.inner === 1 && after.quoteLines === 0,
-    JSON.stringify({ mounted, cell, focusState, tableLines, outsideIntact, quotes: after.quotes, inner: after.inner, quoteLines: after.quoteLines }),
+    JSON.stringify({ mounted, cell, focusState, tableLines, markdownShape, noHtml, outsideIntact, quotes: after.quotes, inner: after.inner, quoteLines: after.quoteLines }),
   );
 }
 
 {
   // ---- AC30: a structural action on the embedded table, then undo ----
   const before = await evaluate(`app.workspace.activeLeaf.view.editor.getValue()`);
-  const beforeTrs = (before.match(/<tr>/g) || []).length;
+  const beforePipe = before.split('\n').filter((l) => l.startsWith('> |')).length;
 
   // The toolbar only renders on hover, so move the real pointer over the table first.
   const hover = await quoteCellCenter('引用第一行', 1, 0);
@@ -1505,14 +1520,12 @@ async function quoteCellCenter(quoteText, row, col) {
     await evaluate(`(() => {
       const cm = app.workspace.activeLeaf.view.editor.cm;
       const doc = app.workspace.activeLeaf.view.editor.getValue();
-      const lines = doc.split('\\n');
-      const start = lines.findIndex((l) => l.includes('<table>'));
-      const end = lines.findIndex((l) => l.includes('</table>'));
-      const tableLines = start >= 0 && end > start ? lines.slice(start, end + 1) : [];
+      const tableLines = doc.split('\\n').filter((l) => l.startsWith('> |'));
       return JSON.stringify({
         doc,
-        trs: (doc.match(/<tr>/g) || []).length,
+        pipeLines: tableLines.length,
         allPrefixed: tableLines.length > 0 && tableLines.every((l) => l.startsWith('> ')),
+        noHtml: !doc.includes('<table>'),
         inner: cm.contentDOM.querySelectorAll('.mdft-quote .mdft-table').length,
       });
     })()`),
@@ -1524,9 +1537,10 @@ async function quoteCellCenter(quoteText, row, col) {
 
   record(
     'AC30',
-    '引用内表格结构操作（插入行）写回正确，Ctrl+Z 恢复原状',
-    !!addRow && mid.trs === beforeTrs + 1 && mid.allPrefixed && mid.inner === 1 && undone === before,
-    JSON.stringify({ addRow, beforeTrs, midTrs: mid.trs, allPrefixed: mid.allPrefixed, inner: mid.inner, undone: undone === before }),
+    '引用内表格结构操作（插入行）写回管道语法，Ctrl+Z 恢复原状',
+    !!addRow && mid.pipeLines === beforePipe + 1 && mid.allPrefixed && mid.noHtml &&
+      mid.inner === 1 && undone === before,
+    JSON.stringify({ addRow, beforePipe, midPipe: mid.pipeLines, allPrefixed: mid.allPrefixed, noHtml: mid.noHtml, inner: mid.inner, undone: undone === before }),
   );
 }
 
@@ -1577,15 +1591,13 @@ async function quoteCellCenter(quoteText, row, col) {
 
   const finalDoc = await evaluate(`app.workspace.activeLeaf.view.editor.getValue()`);
   const lines = finalDoc.split('\n');
-  const listStart = lines.findIndex((l) => l.includes('<table>'));
-  const listEnd = lines.findIndex((l) => l.includes('</table>'));
-  const listTable = listStart >= 0 && listEnd > listStart ? lines.slice(listStart, listEnd + 1) : [];
-  const nestedStart = lines.findIndex((l) => l.startsWith('> > <table>'));
-  const nestedEnd = lines.findIndex((l, i) => i > nestedStart && l.startsWith('> > </table>'));
-  const nestedTable = nestedStart >= 0 && nestedEnd > nestedStart ? lines.slice(nestedStart, nestedEnd + 1) : [];
+  // Both tables must still be Markdown: three pipe lines each, with their own prefix.
+  const listTable = lines.filter((l) => l.startsWith('  > |'));
+  const nestedTable = lines.filter((l) => l.startsWith('> > |'));
 
-  const listPrefixed = listTable.length > 0 && listTable.every((l) => l.startsWith('  > '));
-  const nestedPrefixed = nestedTable.length > 0 && nestedTable.every((l) => l.startsWith('> > '));
+  const listPrefixed = listTable.length === 3 && listTable.every((l) => l.startsWith('  > '));
+  const nestedPrefixed = nestedTable.length === 3 && nestedTable.every((l) => l.startsWith('> > '));
+  const noHtml = !finalDoc.includes('<table>');
   const structureIntact =
     finalDoc.includes('- 列表项') &&
     finalDoc.includes('  > 列表里的引用') &&
@@ -1606,11 +1618,11 @@ async function quoteCellCenter(quoteText, row, col) {
 
   record(
     'AC31',
-    '列表内引用与嵌套引用中的表格可编辑：前缀/层级保留，偏移漂移后仍写对区间',
+    '列表内引用与嵌套引用中的表格可编辑：写回管道语法，前缀/层级保留，偏移漂移后仍写对区间',
     mounted.quotes === 2 && mounted.inner === 2 &&
-      listPrefixed && nestedPrefixed && firstEditKept && secondEditKept && structureIntact &&
+      listPrefixed && nestedPrefixed && noHtml && firstEditKept && secondEditKept && structureIntact &&
       afterState.quotes === 2 && afterState.inner === 2,
-    JSON.stringify({ mounted, listTable, nestedTable, listPrefixed, nestedPrefixed, firstEditKept, secondEditKept, structureIntact, afterState }),
+    JSON.stringify({ mounted, listTable, nestedTable, listPrefixed, nestedPrefixed, noHtml, firstEditKept, secondEditKept, structureIntact, afterState }),
   );
 }
 
@@ -1710,21 +1722,326 @@ async function quoteCellCenter(quoteText, row, col) {
   );
 }
 
+// ---------------------------------------------------------------- AC34 / AC35
+
+{
+  const SRC = [
+    '# 管道写回',
+    '',
+    '| 甲 | 乙 |',
+    '| :--- | ---: |',
+    '| 1 | 2 |',
+    '',
+    '后文',
+    '',
+  ].join('\n');
+
+  await openFile('fx-pipe-writeback.md', SRC);
+  const cell = await cellCenter(1, 1);
+  if (cell) await typeAt(cell.x, cell.y, '改');
+  await pressKey('Enter', 0, 'Enter', 13);
+  await sleep(1600);
+
+  const after = JSON.parse(
+    await evaluate(`(() => {
+      const cm = app.workspace.activeLeaf.view.editor.cm;
+      return JSON.stringify({
+        doc: app.workspace.activeLeaf.view.editor.getValue(),
+        widgets: cm.contentDOM.querySelectorAll('.mdft-table').length,
+      });
+    })()`),
+  );
+
+  const lines = after.doc.split('\n');
+  const tableLines = lines.filter((l) => l.startsWith('|'));
+  const body = tableLines[2] ?? '';
+  const markdownShape =
+    tableLines.length === 3 &&
+    tableLines[0] === '| 甲 | 乙 |' &&
+    tableLines[1] === '| :--- | ---: |' &&
+    body.startsWith('| 1 |') && body.includes('改');
+  const noHtml = !after.doc.includes('<table>');
+  const outsideIntact = after.doc.startsWith('# 管道写回\n\n') && after.doc.endsWith('\n\n后文\n');
+
+  record(
+    'AC34',
+    '顶层管道表格编辑后仍写回 Markdown 管道语法（对齐保留、无 HTML），表格外字节不变',
+    !!cell && markdownShape && noHtml && outsideIntact && after.widgets === 1,
+    JSON.stringify({ cell, tableLines, markdownShape, noHtml, outsideIntact, widgets: after.widgets }),
+  );
+}
+
+{
+  // ---- AC35: merge forces HTML; split stays HTML; 转 MD returns to Markdown; undo ----
+  const SRC = [
+    '# 合并与转回',
+    '',
+    '| 甲 | 乙 |',
+    '| --- | --- |',
+    '| 1 | 2 |',
+    '',
+    '后文',
+    '',
+  ].join('\n');
+
+  await openFile('fx-convert.md', SRC);
+
+  const a = await cellCenter(1, 0);
+  const b = await cellCenter(1, 1);
+  await realClick(a.x, a.y);
+  await realClick(b.x, b.y, SHIFT);
+  const merge = await buttonCenter('合并');
+  if (merge) await realClick(merge.x, merge.y);
+  await sleep(1200);
+
+  const mergedDoc = await evaluate(`app.workspace.activeLeaf.view.editor.getValue()`);
+  const mergedHtml = mergedDoc.includes('<table>') && /colspan="2"/.test(mergedDoc);
+
+  // Split the merged cell: select it, then use the toolbar.
+  const mergedCell = await cellCenter(1, 0);
+  if (mergedCell) await realClick(mergedCell.x, mergedCell.y);
+  const split = await buttonCenter('拆分');
+  if (split) await realClick(split.x, split.y);
+  await sleep(1200);
+
+  const splitDoc = await evaluate(`app.workspace.activeLeaf.view.editor.getValue()`);
+  const stillHtml =
+    splitDoc.includes('<table>') &&
+    !splitDoc.split('\n').some((l) => l.startsWith('|'));
+
+  // Hover the table so the toolbar is visible, then convert back to Markdown.
+  const hover = await cellCenter(1, 0);
+  if (hover) await realMove(hover.x, hover.y);
+  const toMd = await buttonCenter('转 MD');
+  if (toMd) await realClick(toMd.x, toMd.y);
+  await sleep(1400);
+
+  const pipeDoc = await evaluate(`app.workspace.activeLeaf.view.editor.getValue()`);
+  const pipeLines = pipeDoc.split('\n').filter((l) => l.startsWith('|'));
+  const pipeBody = pipeLines[2] ?? '';
+  // mergeCells() concatenates the merged cells' text into the anchor (space-separated),
+  // and splitCell() keeps that text in the first cell and empties the second. The point
+  // here is the storage format, not restoring pre-merge text, so assert the merged text
+  // survives and the row is well-formed.
+  const backToMarkdown =
+    !pipeDoc.includes('<table>') &&
+    pipeLines.length === 3 &&
+    pipeLines[0] === '| 甲 | 乙 |' &&
+    pipeBody.startsWith('| 1 2 |') &&
+    pipeBody.endsWith('|');
+
+  await pressKey('z', 2, 'KeyZ', 90);
+  await sleep(1400);
+  const undoneDoc = await evaluate(`app.workspace.activeLeaf.view.editor.getValue()`);
+  const undoRestoresHtml = undoneDoc === splitDoc;
+
+  record(
+    'AC35',
+    '合并降级 HTML；拆分后仍为 HTML；工具栏「转 MD」写回管道语法；Ctrl+Z 恢复 HTML',
+    mergedHtml && stillHtml && !!toMd && backToMarkdown && undoRestoresHtml,
+    JSON.stringify({ mergedHtml, stillHtml, toMd, pipeLines, backToMarkdown, undoRestoresHtml }),
+  );
+}
+
+// ---------------------------------------------------------------- AC36
+
+{
+  const SRC = [
+    '# 引用内 HTML 转 MD',
+    '',
+    '> 引用文字',
+    '>',
+    '> <table>',
+    '>   <tr><th>甲</th></tr>',
+    '>   <tr><td>1</td></tr>',
+    '> </table>',
+    '',
+    '后文',
+    '',
+  ].join('\n');
+
+  await openFile('fx-quote-html-convert.md', SRC);
+  const mounted = JSON.parse(
+    await evaluate(`(() => {
+      const cm = app.workspace.activeLeaf.view.editor.cm;
+      return JSON.stringify({
+        inner: cm.contentDOM.querySelectorAll('.mdft-quote .mdft-table').length,
+        staticTables: cm.contentDOM.querySelectorAll('.mdft-quote blockquote table:not(.mdft-table__el)').length,
+      });
+    })()`),
+  );
+
+  const cell = await quoteCellCenter('引用文字', 1, 0);
+  if (cell) await realMove(cell.x, cell.y);
+  const toMd = await quoteButtonCenter('引用文字', '转 MD');
+  if (toMd) await realClick(toMd.x, toMd.y);
+  await sleep(1600);
+
+  const after = JSON.parse(
+    await evaluate(`(() => {
+      const cm = app.workspace.activeLeaf.view.editor.cm;
+      return JSON.stringify({
+        doc: app.workspace.activeLeaf.view.editor.getValue(),
+        inner: cm.contentDOM.querySelectorAll('.mdft-quote .mdft-table').length,
+        quoteLines: cm.contentDOM.querySelectorAll('.HyperMD-quote').length,
+      });
+    })()`),
+  );
+
+  const tableLines = after.doc.split('\n').filter((l) => l.startsWith('> |'));
+  const converted =
+    tableLines.length === 3 &&
+    tableLines[0] === '> | 甲 |' &&
+    tableLines[1] === '> | --- |' &&
+    tableLines[2] === '> | 1 |';
+  const noHtml = !after.doc.includes('<table>');
+  const structureIntact = after.doc.includes('> 引用文字') && after.doc.endsWith('\n\n后文\n');
+
+  record(
+    'AC36',
+    '引用内 HTML 表格可通过「转 MD」写回带 "> " 前缀的管道语法，引用结构不变',
+    mounted.inner === 1 && mounted.staticTables === 0 && !!toMd && converted && noHtml &&
+      structureIntact && after.inner === 1 && after.quoteLines === 0,
+    JSON.stringify({ mounted, toMd, tableLines, converted, noHtml, structureIntact, inner: after.inner, quoteLines: after.quoteLines }),
+  );
+}
+
+// ---------------------------------------------------------------- AC37 / AC38
+
+{
+  const SRC = [
+    '---',
+    'title: 导出测试',
+    '---',
+    '',
+    '# 导出',
+    '',
+    '<table>',
+    '  <tr><th>甲</th></tr>',
+    '  <tr><td>1</td></tr>',
+    '</table>',
+    '',
+    '<table>',
+    '  <tr><th colspan="2">合并</th></tr>',
+    '  <tr><td>a</td><td>b</td></tr>',
+    '</table>',
+    '',
+    '| x | y |',
+    '| --- | --- |',
+    '| 1 | 2 |',
+    '',
+  ].join('\n');
+
+  await openFile('fx-export.md', SRC);
+
+  // Intercept both export sinks: the clipboard and the anchor download.
+  // In this Electron build `writeText` is an **own** property of the clipboard
+  // instance, so patching the prototype alone silently misses it.
+  const patched = await evaluate(`(() => {
+    window.__mdftClipboard = null;
+    if (navigator.clipboard) {
+      const clip = navigator.clipboard;
+      window.__mdftWriteTarget = Object.hasOwn(clip, 'writeText')
+        ? clip
+        : Object.getPrototypeOf(clip);
+      window.__mdftOrigWrite = window.__mdftWriteTarget.writeText;
+      Object.defineProperty(window.__mdftWriteTarget, 'writeText', {
+        configurable: true,
+        writable: true,
+        value: async function (text) { window.__mdftClipboard = text; },
+      });
+    }
+    window.__mdftOrigExec = document.execCommand.bind(document);
+    document.execCommand = function (cmd, ...rest) {
+      if (cmd === 'copy') {
+        const area = document.querySelector('textarea');
+        window.__mdftClipboard = area ? area.value : null;
+        return true;
+      }
+      return window.__mdftOrigExec(cmd, ...rest);
+    };
+
+    window.__mdftDownload = null;
+    window.__mdftOrigClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function () {
+      if (this.download) window.__mdftDownload = { name: this.download, href: this.href };
+      else window.__mdftOrigClick.call(this);
+    };
+    return 'ok';
+  })()`);
+
+  const copyRan = await evaluate(`app.commands.executeCommandById('editable-tables:copy-as-markdown')`);
+  await sleep(700);
+  const clipboard = await evaluate(`window.__mdftClipboard`);
+
+  const exportRan = await evaluate(`app.commands.executeCommandById('editable-tables:export-as-markdown')`);
+  await sleep(700);
+  const download = await evaluate(`(window.__mdftDownload ? JSON.stringify(window.__mdftDownload) : null)`);
+  const downloaded = download
+    ? await evaluate(`(async () => {
+        const res = await fetch(${JSON.stringify(JSON.parse(download).href)});
+        return await res.text();
+      })()`)
+    : null;
+
+  // Restore the sinks before asserting, so later ACs are unaffected either way.
+  await evaluate(`(() => {
+    if (window.__mdftWriteTarget) {
+      Object.defineProperty(window.__mdftWriteTarget, 'writeText', {
+        configurable: true,
+        writable: true,
+        value: window.__mdftOrigWrite,
+      });
+    }
+    delete document.execCommand; // fall back to the prototype implementation
+    HTMLAnchorElement.prototype.click = window.__mdftOrigClick;
+    return 'restored';
+  })()`);
+
+  const original = await evaluate(`app.workspace.activeLeaf.view.editor.getValue()`);
+  const stillOriginal = original === SRC;
+  const mdText = typeof clipboard === 'string' ? clipboard : '';
+
+  const simpleConverted = mdText.includes('| 甲 |') && mdText.includes('| 1 |');
+  const mergedKept = mdText.includes('<table>') && /colspan="2"/.test(mdText);
+  const pipeKept = mdText.includes('| x | y |') && mdText.includes('| 1 | 2 |');
+  const frontMatterKept = mdText.startsWith('---\ntitle: 导出测试\n---\n');
+  const downloadedOk =
+    download !== null &&
+    JSON.parse(download).name === 'fx-export.md' &&
+    downloaded === mdText;
+
+  record(
+    'AC37',
+    '复制为 Markdown：可转换的 HTML 表格变管道语法，合并表格保持 HTML，原笔记不变',
+    patched === 'ok' && copyRan !== false && simpleConverted && mergedKept && pipeKept &&
+      frontMatterKept && stillOriginal,
+    JSON.stringify({ copyRan, simpleConverted, mergedKept, pipeKept, frontMatterKept, stillOriginal, text: mdText.slice(0, 400) }),
+  );
+
+  record(
+    'AC38',
+    '导出为 Markdown 文件：下载名为 <笔记名>.md，blob 内容与复制的 Markdown 一致',
+    exportRan !== false && downloadedOk,
+    JSON.stringify({ exportRan, download, downloadedMatches: downloaded === mdText }),
+  );
+}
+
 // ---------------------------------------------------------------- AC33
 
 {
-  // The suite's own numbering goes AC1–AC27, then the ACs added with this task (AC29–AC32).
-  // There is no AC28 — it was never defined, so it must not be demanded here.
+  // The suite's numbering goes AC1–AC27, then AC29–AC38 (AC28 was never defined).
+  // AC33 is this summary itself.
   const prior = [];
-  for (let i = 1; i <= 32; i++) {
-    if (i === 28) continue;
+  for (let i = 1; i <= 38; i++) {
+    if (i === 28 || i === 33) continue;
     prior.push('AC' + i);
   }
   const missing = prior.filter((id) => !results.some((r) => r.id === id));
   const failed = prior.filter((id) => results.some((r) => r.id === id && !r.pass));
   record(
     'AC33',
-    '既有 AC1–AC27 与新增 AC29–AC32 全部通过',
+    '既有 AC1–AC27、AC29–AC32 与新增 AC34–AC38 全部通过',
     missing.length === 0 && failed.length === 0,
     `missing=${missing.join(',') || 'none'} failed=${failed.join(',') || 'none'}`,
   );
