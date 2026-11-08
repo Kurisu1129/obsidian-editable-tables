@@ -130,3 +130,25 @@
 ### Next Steps
 
 - 剩余边界：缩进代码块内的 > 误判、源码模式加载、主题切换后 padding 需重渲染、region 双扫描未合并
+
+
+## Session 4: 表格拖拽多选与引用块拖拽选字
+<!-- trellis-session: v=2 fp=154136ef0d612060 -->
+
+**Date**: 2026-11-08
+**Task**: 表格拖拽多选与引用块拖拽选字
+**Branch**: `main`
+
+### Summary
+
+修复用户报告的两处手势问题:表格单元格支持拖拽矩形框选(拖回锚点收缩)+ Shift 单击,tooltip 可发现;引用块单击不切源码,拖拽用 CSS Custom Highlight 自绘选区并接管 copy,双击才进入源码。复核期发现并修复 CM6 虚拟化下的缩进丢失(widget 缩进缓存 + viewportChanged 重测,codeIndent 顶层才清缓存),验收探针改为真实 CDP 鼠标并修正光标/滚动错位与尾部 cm-gap 漏测。29/29 验收、63/63 单测通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ed478c6` | feat: 表格拖拽多选与引用块拖拽选字 |
+
+### Status
+
+[OK] **Completed**
