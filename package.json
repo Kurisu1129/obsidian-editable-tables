@@ -1,6 +1,6 @@
 {
   "name": "obsidian-editable-tables",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Editable tables in Obsidian Live Preview",
   "main": "main.js",
   "type": "module",
