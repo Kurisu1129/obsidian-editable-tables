@@ -174,3 +174,25 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 6: 表格编辑写回 Markdown 与导出 md
+<!-- trellis-session: v=2 fp=0380b08211bd666d -->
+
+**Date**: 2026-11-08
+**Task**: 表格编辑写回 Markdown 与导出 md
+**Branch**: `main`
+
+### Summary
+
+渲染层编辑不再把表格永久改写成 HTML：新增 serializePipe（可无损表示时写回 GFM 管道语法，合并等结构才降级 HTML）与 commitGrid.forcePipe，工具栏新增「转 MD」；新增纯函数 exportMarkdown 与「复制/导出为 Markdown」只读命令；单元格输入折叠换行保证单行；验收新增 AC34–AC38 并把 AC29–AC31 改为断言管道语法，39/39 通过；单测 104。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `67f5f8a` | feat: 表格编辑写回 Markdown 管道语法并支持导出 md |
+
+### Status
+
+[OK] **Completed**
