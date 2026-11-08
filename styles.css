@@ -81,6 +81,15 @@
   background-color: var(--table-selection, var(--text-selection, rgba(120, 120, 255, 0.25)));
 }
 
+/*
+ * During a drag across cells, suppress native text selection: the browser started one
+ * on mousedown, and without this the drag would select body text instead of cells.
+ */
+.mdft-table.is-dragging,
+.mdft-table.is-dragging * {
+  user-select: none;
+}
+
 /* ------------------------------------------------------------------- toolbar */
 
 .mdft-toolbar {
@@ -168,4 +177,20 @@
    widget's height is exactly its content and the heightmap stays accurate (AC20). */
 .mdft-quote__body > blockquote {
   margin-block: 0;
+}
+
+/* Dragging inside the quote paints the plugin's own selection, so suppress any attempt at
+   a native one (which CM6 would map back into the document and rebuild the widget). */
+.mdft-quote.is-selecting,
+.mdft-quote.is-selecting * {
+  user-select: none;
+}
+
+/*
+ * The quote's text selection is drawn with the CSS Custom Highlight API rather than the
+ * native one, because a native selection inside a contenteditable=false widget makes CM6
+ * rebuild it mid-drag. `::highlight()` is the only way to style that range.
+ */
+::highlight(mdft-quote-selection) {
+  background-color: var(--text-selection);
 }

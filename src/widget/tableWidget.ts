@@ -43,6 +43,12 @@ interface WidgetState {
   sel: Selection | null;
   grid: TableGrid;
   editing: EditingCell | null;
+  /**
+   * A left-button drag in progress, anchored on the cell where it started.
+   * `moved` flips once the pointer enters a *different* cell: until then a press is
+   * still a click (which focuses the cell for editing), not a range selection.
+   */
+  drag: { r: number; c: number; moved: boolean } | null;
 }
 
 function ordered(sel: Selection): Selection {
@@ -112,6 +118,7 @@ export class TableWidget extends WidgetType {
       // mutating it would leak uncommitted cell text into later re-renders.
       grid: cloneGrid(this.region.grid),
       editing: null,
+      drag: null,
     };
 
     // The widget's own height can change without any document transaction (e.g. typing
@@ -244,12 +251,68 @@ export class TableWidget extends WidgetType {
     };
 
     cellEl.addEventListener('mousedown', (ev) => {
+      if (ev.button !== 0) return;
       if (ev.shiftKey && state.sel) {
         ev.preventDefault(); // keep the browser from starting a text selection drag
         state.sel = { ...state.sel, r2: r, c2: c };
+        state.drag = null;
       } else {
         state.sel = { r1: r, c1: c, r2: r, c2: c };
+        // Not preventDefault: a plain press must still focus the cell so click-to-type
+        // works. The press only becomes a range drag once the pointer enters another
+        // cell while the button is held (see the mouseover handler below).
+        state.drag = { r, c, moved: false };
+        window.addEventListener('mouseup', endDrag, { once: true, capture: true });
       }
+      rememberSelection(view, this.region.from, state.sel);
+      repaintHighlight();
+      onSelectionChange();
+    });
+
+    /**
+     * Ends the drag even when the pointer is released outside the widget. `once` keeps
+     * at most one live listener per press; a widget rebuild discards `state` anyway.
+     */
+    const endDrag = (): void => {
+      state.drag = null;
+      cellEl.closest('.mdft-table')?.classList.remove('is-dragging');
+    };
+
+    /**
+     * Extends the range while the left button is held and the pointer moves to another
+     * cell. `mouseover` (not `mouseenter`) bubbles, so the handler also fires when the
+     * pointer passes over the cell's inner contenteditable.
+     */
+    cellEl.addEventListener('mouseover', (ev) => {
+      const drag = state.drag;
+      if (!drag || !(ev.buttons & 1)) return;
+
+      if (!drag.moved) {
+        drag.moved = true;
+        // The press already started a text selection and focused the anchor cell.
+        // Cancel both: from here on this is a cell-range drag, not click-to-edit.
+        cellEl.closest('.mdft-table')?.classList.add('is-dragging');
+        window.getSelection()?.removeAllRanges();
+        const active = document.activeElement;
+        if (
+          active instanceof HTMLElement &&
+          active.closest('.mdft-table') === cellEl.closest('.mdft-table')
+        ) {
+          active.blur();
+        }
+      }
+
+      const next: Selection = { r1: drag.r, c1: drag.c, r2: r, c2: c };
+      if (
+        state.sel &&
+        state.sel.r1 === next.r1 &&
+        state.sel.c1 === next.c1 &&
+        state.sel.r2 === next.r2 &&
+        state.sel.c2 === next.c2
+      ) {
+        return; // same cell again — do not rebuild the toolbar on every mouseover
+      }
+      state.sel = next;
       rememberSelection(view, this.region.from, state.sel);
       repaintHighlight();
       onSelectionChange();
@@ -361,10 +424,13 @@ export class TableWidget extends WidgetType {
     }
     sep();
 
+    const multi = isMulti();
     add(
       '合并',
-      isMulti() ? '合并选中的单元格' : '先按住 Shift 点击以选中一片单元格',
-      isMulti()
+      multi
+        ? `合并选中的 ${anchor()!.r2 - anchor()!.r1 + 1}×${anchor()!.c2 - anchor()!.c1 + 1} 区域`
+        : '拖拽框选，或按住 Shift 单击另一格，多选后可合并',
+      multi
         ? () =>
             apply((g) => {
               const a = anchor()!;

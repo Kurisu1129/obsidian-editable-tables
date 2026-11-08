@@ -59,15 +59,21 @@ function buildIndents(view: EditorView, cache: Map<number, number>): IndentRange
     if (mapped) {
       const indent = leadingWhitespace(lines[block.startLine]);
       // A top-level fence has no item to align with; never reuse a stale margin for it.
-      const item = indent === '' ? null : findOwningItemLine(beginLine!, indent);
-      if (!item) {
+      // A non-empty indent, though, does not prove the owner is *visible*: CM6 renders
+      // only the viewport, and the owning list line may sit just above it. Dropping the
+      // cached margin in that case made the indent blink away on scroll, so keep it —
+      // `findOwningItemLine` can only be trusted when it actually finds a line.
+      if (indent === '') {
         cache.delete(block.startLine);
         margin = undefined;
       } else {
-        const textLeft = firstContentLeft(item);
-        if (textLeft !== null) {
-          margin = textLeft - contentLeft;
-          cache.set(block.startLine, margin);
+        const item = findOwningItemLine(beginLine!, indent);
+        if (item) {
+          const textLeft = firstContentLeft(item);
+          if (textLeft !== null) {
+            margin = textLeft - contentLeft;
+            cache.set(block.startLine, margin);
+          }
         }
       }
     }

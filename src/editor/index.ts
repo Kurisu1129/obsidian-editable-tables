@@ -1,6 +1,7 @@
 import { Prec, type Extension } from '@codemirror/state';
 import { blockExtensionFields } from './field';
 import { codeIndentExtension } from './codeIndent';
+import { widgetIndentRefresher } from './indent';
 
 /**
  * The extension injected into every editor via `Plugin.registerEditorExtension`.
@@ -16,4 +17,5 @@ import { codeIndentExtension } from './codeIndent';
 export const editableTablesExtension: Extension = Prec.highest([
   blockExtensionFields,
   codeIndentExtension,
+  widgetIndentRefresher,
 ]);

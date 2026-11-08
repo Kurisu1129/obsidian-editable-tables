@@ -48,6 +48,104 @@ async function pressKey(key, modifiers, code, vk) {
   await sleep(700);
 }
 
+/** Shift modifier bit in CDP's `modifiers` mask. */
+const SHIFT = 8;
+
+/**
+ * A real left click at viewport coordinates.
+ *
+ * Synthetic `element.dispatchEvent(new MouseEvent(...))` bypasses hit-testing, focus and
+ * the browser's event plumbing — the merge feature passed AC4 that way while the natural
+ * drag gesture did not actually work. Interaction ACs must go through CDP input.
+ */
+async function realClick(x, y, modifiers = 0, clickCount = 1) {
+  for (const type of ['mousePressed', 'mouseReleased']) {
+    await client.send('Input.dispatchMouseEvent', {
+      type, x, y, button: 'left', clickCount, modifiers,
+      buttons: type === 'mousePressed' ? 1 : 0,
+    });
+    await sleep(60);
+  }
+  await sleep(300);
+}
+
+/** Two real clicks in quick succession, so Chromium emits `dblclick` on the second. */
+async function realDoubleClick(x, y) {
+  await realClick(x, y, 0, 1);
+  await realClick(x, y, 0, 2);
+}
+
+/** Press on `from`, move through intermediate points, release on `to`. */
+async function realDrag(from, to) {
+  await realDragPath([from, to]);
+}
+
+/** Press at `points[0]`, move through each later point, release on the last one. */
+async function realDragPath(points) {
+  const start = points[0];
+  await client.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed', x: start.x, y: start.y, button: 'left', clickCount: 1, buttons: 1,
+  });
+  for (let i = 1; i < points.length; i++) {
+    const from = points[i - 1];
+    const to = points[i];
+    const steps = 4;
+    for (let s = 1; s <= steps; s++) {
+      await client.send('Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x: Math.round(from.x + ((to.x - from.x) * s) / steps),
+        y: Math.round(from.y + ((to.y - from.y) * s) / steps),
+        button: 'left', buttons: 1,
+      });
+      await sleep(60);
+    }
+  }
+  const end = points[points.length - 1];
+  await client.send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased', x: end.x, y: end.y, button: 'left', clickCount: 1, buttons: 0,
+  });
+  await sleep(350);
+}
+
+/** Center of a cell, in viewport coordinates, or null when it is not rendered. */
+async function cellCenter(row, col) {
+  const raw = await evaluate(`(() => {
+    const cm = app.workspace.activeLeaf.view.editor.cm;
+    const el = cm.contentDOM.querySelector('td[data-row="${row}"][data-col="${col}"]');
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return JSON.stringify({ x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) });
+  })()`);
+  return raw ? JSON.parse(raw) : null;
+}
+
+/** Center of a toolbar button by its label, or null when absent. */
+async function buttonCenter(label) {
+  const raw = await evaluate(`(() => {
+    const cm = app.workspace.activeLeaf.view.editor.cm;
+    const el = [...cm.contentDOM.querySelectorAll('.mdft-btn')].find((b) => b.textContent === ${JSON.stringify(label)});
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return JSON.stringify({ x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) });
+  })()`);
+  return raw ? JSON.parse(raw) : null;
+}
+
+/** Current cell selection count and merge-button state, as rendered. */
+async function selectionState() {
+  return JSON.parse(
+    await evaluate(`(() => {
+      const cm = app.workspace.activeLeaf.view.editor.cm;
+      const merge = [...cm.contentDOM.querySelectorAll('.mdft-btn')].find((b) => b.textContent === '合并');
+      return JSON.stringify({
+        selected: cm.contentDOM.querySelectorAll('.mdft-selected').length,
+        mergeDisabled: merge ? merge.disabled : null,
+        mergeTitle: merge ? merge.title : null,
+      });
+    })()`),
+  );
+}
+
 /**
  * Opens `path`, optionally forcing its content to `source`.
  *
@@ -77,10 +175,15 @@ async function openFile(path, source) {
         : ''
     }
 
-    // A reopened file restores its previous scroll position, and CM6 only renders the
-    // viewport. Callers that measure the whole fixture need it rendered from the top.
+    // A reopened file restores its previous scroll position and cursor, and CM6 only
+    // renders the viewport. Reset both: callers that measure the whole fixture need it
+    // rendered from the top, and a cursor left at the end desyncs the viewport from the
+    // scroll position (CM6 keeps rendering around the selection while scrollTop is 0).
     const cmEl = app.workspace.activeLeaf.view.editor.cm;
-    if (cmEl?.scrollDOM) cmEl.scrollDOM.scrollTop = 0;
+    if (cmEl?.scrollDOM) {
+      cmEl.dispatch({ selection: { anchor: 0 } });
+      cmEl.scrollDOM.scrollTop = 0;
+    }
     await sleep(400);
 
     await sleep(800);
@@ -198,28 +301,81 @@ async function openFile(path, source) {
   record('AC3', '单元格编辑只改动该表格，其余字节不变', untouched, detail.doc);
 }
 
-// ---------------------------------------------------------------- AC4
+// ---------------------------------------------------------------- AC4 / AC23 / AC25
+
+const MERGE_SRC = '# 表\n\n| 甲 | 乙 | 丙 |\n| --- | --- | --- |\n| 1 | 2 | 3 |\n| 4 | 5 | 6 |\n';
 
 {
-  await openFile('ac4.md', '# 表\n\n| 甲 | 乙 | 丙 |\n| --- | --- | --- |\n| 1 | 2 | 3 |\n| 4 | 5 | 6 |\n');
-  const detail = JSON.parse(
-    await evaluate(`(async () => {
-      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-      const cm = () => app.workspace.activeLeaf.view.editor.cm;
-      const md = (ev, extra = {}) => new MouseEvent(ev, { bubbles: true, cancelable: true, ...extra });
-      const btn = (t) => [...cm().contentDOM.querySelectorAll('.mdft-btn')].find((b) => b.textContent === t);
-      cm().contentDOM.querySelector('td[data-row="1"][data-col="0"]').dispatchEvent(md('mousedown'));
-      await sleep(150);
-      cm().contentDOM.querySelector('td[data-row="1"][data-col="1"]').dispatchEvent(md('mousedown', { shiftKey: true }));
-      await sleep(250);
-      btn('合并').dispatchEvent(md('mousedown'));
-      await sleep(900);
-      return JSON.stringify({ doc: app.workspace.activeLeaf.view.editor.getValue() });
-    })()`),
+  // Real input, not synthetic events: the whole point of this check is that the user's
+  // actual gesture reaches the cell handlers.
+  await openFile('ac4.md', MERGE_SRC);
+
+  const a = await cellCenter(1, 0);
+  const b = await cellCenter(1, 1);
+  await realClick(a.x, a.y);
+  await realClick(b.x, b.y, SHIFT);
+  const picked = await selectionState();
+
+  const merge = await buttonCenter('合并');
+  if (merge) await realClick(merge.x, merge.y);
+
+  const doc = await evaluate(`app.workspace.activeLeaf.view.editor.getValue()`);
+  const hasSpan = /colspan="2"/.test(doc);
+  const count = (doc.match(/<td/g) || []).length;
+  record(
+    'AC4',
+    '真实鼠标 Shift+单击多选后合并，产生自洽的 colspan',
+    picked.selected === 2 && !picked.mergeDisabled && hasSpan && count === 5,
+    `选中=${picked.selected} 合并可用=${!picked.mergeDisabled} colspan=${hasSpan} td数=${count}\n${doc}`,
   );
-  const hasSpan = /colspan="2"/.test(detail.doc);
-  const count = (detail.doc.match(/<td/g) || []).length;
-  record('AC4', '合并产生自洽的 colspan', hasSpan && count === 5, `colspan=${hasSpan} td数=${count}\n${detail.doc}`);
+
+  // Same gesture as AC4, kept as its own record so the PRD's AC numbering stays 1:1.
+  record(
+    'AC24',
+    '真实鼠标 Shift+单击多选（不依赖合成事件）',
+    picked.selected === 2 && !picked.mergeDisabled,
+    JSON.stringify(picked),
+  );
+
+  // ---- AC25: the multi-select gesture must be discoverable before it is needed ----
+  await openFile('ac4.md', MERGE_SRC);
+  const single = await cellCenter(1, 0);
+  await realClick(single.x, single.y);
+  const hint = await selectionState();
+  const dragTo = await cellCenter(1, 1);
+  await realDrag(single, dragTo);
+  const afterDrag = await selectionState();
+  record(
+    'AC25',
+    '单选时提示拖拽 / Shift 多选，拖拽后按钮可用',
+    /拖拽/.test(hint.mergeTitle ?? '') &&
+      /Shift/.test(hint.mergeTitle ?? '') &&
+      hint.mergeDisabled === true &&
+      afterDrag.mergeDisabled === false,
+    JSON.stringify({ singleTitle: hint.mergeTitle, dragSelected: afterDrag.selected, dragTitle: afterDrag.mergeTitle }),
+  );
+
+  // ---- AC23: drag a 2×2 rectangle and merge it ----
+  await openFile('ac4.md', MERGE_SRC);
+  const dragA = await cellCenter(1, 0);
+  const dragB = await cellCenter(2, 1);
+  // Leaving the anchor and coming back must shrink the range to the anchor again, not
+  // leave the stale 2×2 rectangle behind.
+  await realDragPath([dragA, dragB, dragA]);
+  const returned = await selectionState();
+  await realDrag(dragA, dragB);
+  const dragged = await selectionState();
+  const merge2 = await buttonCenter('合并');
+  if (merge2) await realClick(merge2.x, merge2.y);
+  const doc2 = await evaluate(`app.workspace.activeLeaf.view.editor.getValue()`);
+  const span2 = /colspan="2"/.test(doc2) && /rowspan="2"/.test(doc2);
+  const count2 = (doc2.match(/<td/g) || []).length;
+  record(
+    'AC23',
+    '真实拖拽 2×2 多选后合并，产生自洽的 colspan + rowspan（中途回到起点范围收缩）',
+    returned.selected === 1 && dragged.selected === 4 && !dragged.mergeDisabled && span2 && count2 === 3,
+    `回起点选中=${returned.selected} 拖拽选中=${dragged.selected} 标题=${JSON.stringify(dragged.mergeTitle)} colspan+rowspan=${span2} td数=${count2}\n${doc2}`,
+  );
 }
 
 // ---------------------------------------------------------------- AC5
@@ -228,20 +384,13 @@ async function openFile(path, source) {
   // GitHub's sanitiser keeps only an allowlist of table markup. Rather than asking a
   // human to eyeball a rendered page, assert the emitted HTML stays inside that
   // allowlist: no class/style/bgcolor, and only colspan/rowspan/align as attributes.
-  await openFile('ac5.md', '# 合并\n\n| 甲 | 乙 | 丙 |\n| --- | --- | --- |\n| 1 | 2 | 3 |\n| 4 | 5 | 6 |\n');
-  await evaluate(`(async () => {
-    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-    const cm = app.workspace.activeLeaf.view.editor.cm;
-    const md = (ev, extra = {}) => new MouseEvent(ev, { bubbles: true, cancelable: true, ...extra });
-    cm.contentDOM.querySelector('td[data-row="1"][data-col="0"]').dispatchEvent(md('mousedown'));
-    await sleep(150);
-    cm.contentDOM.querySelector('td[data-row="2"][data-col="0"]').dispatchEvent(md('mousedown', { shiftKey: true }));
-    await sleep(250);
-    [...cm.contentDOM.querySelectorAll('.mdft-btn')].find((b) => b.textContent === '合并')
-      .dispatchEvent(md('mousedown'));
-    await sleep(1000);
-    return 'ok';
-  })()`);
+  await openFile('ac5.md', MERGE_SRC);
+  const a = await cellCenter(1, 0);
+  const b = await cellCenter(2, 0);
+  await realClick(a.x, a.y);
+  await realClick(b.x, b.y, SHIFT);
+  const merge = await buttonCenter('合并');
+  if (merge) await realClick(merge.x, merge.y);
 
   const html = await evaluate(`app.workspace.activeLeaf.view.editor.getValue()`);
   const tags = [...html.matchAll(/<\/?([a-zA-Z][a-zA-Z0-9]*)/g)].map((m) => m[1].toLowerCase());
@@ -731,6 +880,118 @@ const QUOTE_SRC = [
   );
 }
 
+// ---------------------------------------------------------------- AC26 / AC27
+
+{
+  const CLICK_SRC = ['# 引用点击', '', '> 引用第一行', '> 第二行', '', '后文', ''].join('\n');
+  await openFile('fx-quote-click.md', CLICK_SRC);
+  const rect = JSON.parse(
+    await evaluate(`(() => {
+      const cm = app.workspace.activeLeaf.view.editor.cm;
+      const p = cm.contentDOM.querySelector('.mdft-quote__body blockquote p');
+      if (!p) return JSON.stringify(null);
+      const r = p.getBoundingClientRect();
+      // Inside the first text line, not on the paragraph's vertical centre: the quote
+      // below it may wrap to a second line, and starting between lines selects only the
+      // newline between them.
+      return JSON.stringify({ x: Math.round(r.left + 6), y: Math.round(r.top + 10) });
+    })()`),
+  );
+
+  // A plain click must stay in the rendered view so text can be selected/copied.
+  await realClick(rect.x, rect.y);
+  const afterClick = JSON.parse(
+    await evaluate(`(() => {
+      const cm = app.workspace.activeLeaf.view.editor.cm;
+      return JSON.stringify({
+        widgets: cm.contentDOM.querySelectorAll('.mdft-quote').length,
+        quoteLines: cm.contentDOM.querySelectorAll('.HyperMD-quote').length,
+      });
+    })()`),
+  );
+
+  // A drag inside the widget must select text (the widget provides this itself: native
+  // selection cannot start inside the editor's non-editable island) without unrendering.
+  // The selection is painted with the CSS Custom Highlight API, so verify the highlight
+  // and the clipboard payload the widget feeds on `copy`, not `window.getSelection()`.
+  await realDrag(rect, { x: rect.x + 300, y: rect.y });
+  const afterDrag = JSON.parse(
+    await evaluate(`(() => {
+      const cm = app.workspace.activeLeaf.view.editor.cm;
+      const wrap = cm.contentDOM.querySelector('.mdft-quote');
+      const dt = new DataTransfer();
+      const ev = new ClipboardEvent('copy', { clipboardData: dt, bubbles: true, cancelable: true });
+      const target = document.activeElement instanceof HTMLElement ? document.activeElement : document.body;
+      target.dispatchEvent(ev);
+      return JSON.stringify({
+        selected: wrap ? wrap.dataset.mdftSelection ?? '' : '',
+        highlighted: CSS.highlights?.has?.('mdft-quote-selection') ?? false,
+        copied: dt.getData('text/plain'),
+        prevented: ev.defaultPrevented,
+        widgets: cm.contentDOM.querySelectorAll('.mdft-quote').length,
+        quoteLines: cm.contentDOM.querySelectorAll('.HyperMD-quote').length,
+      });
+    })()`),
+  );
+
+  // A double click is the way into source editing.
+  await realDoubleClick(rect.x, rect.y);
+  const afterDouble = JSON.parse(
+    await evaluate(`(() => {
+      const cm = app.workspace.activeLeaf.view.editor.cm;
+      const head = cm.state.selection.main.head;
+      return JSON.stringify({
+        widgets: cm.contentDOM.querySelectorAll('.mdft-quote').length,
+        quoteLines: cm.contentDOM.querySelectorAll('.HyperMD-quote').length,
+        line: cm.state.doc.lineAt(head).number,
+        text: cm.state.doc.lineAt(head).text,
+      });
+    })()`),
+  );
+
+  record(
+    'AC26',
+    '真实鼠标：单击/拖选保留渲染与文字选择（可复制），双击才还原为源码',
+    !!rect &&
+      afterClick.widgets === 1 &&
+      afterClick.quoteLines === 0 &&
+      /引用第一行/.test(afterDrag.selected) &&
+      afterDrag.highlighted &&
+      afterDrag.prevented &&
+      /引用第一行/.test(afterDrag.copied) &&
+      afterDrag.widgets === 1 &&
+      afterDrag.quoteLines === 0 &&
+      afterDouble.widgets === 0 &&
+      afterDouble.quoteLines > 0 &&
+      afterDouble.text.trimStart().startsWith('>'),
+    JSON.stringify({ rect, afterClick, afterDrag, afterDouble }),
+  );
+
+  // ---- AC27: links inside the rendered quote keep their own click behaviour ----
+  const LINK_SRC =
+    '# link\n\n> 引用里有内链 [[probe-link-target]]\n>\n> 还有嵌入 ![[probe-link-target]]\n>\n> 以及外链 [example](https://example.com)\n';
+  await openFile('probe-link-target.md', '# 目标\n\n链接目标。\n');
+  await openFile('fx-quote-links.md', LINK_SRC);
+  const link = JSON.parse(
+    await evaluate(`(() => {
+      const cm = app.workspace.activeLeaf.view.editor.cm;
+      const el = cm.contentDOM.querySelector('.mdft-quote a.internal-link');
+      if (!el) return JSON.stringify(null);
+      const r = el.getBoundingClientRect();
+      return JSON.stringify({ x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) });
+    })()`),
+  );
+  await realClick(link?.x ?? 0, link?.y ?? 0);
+  await sleep(900);
+  const activePath = await evaluate(`app.workspace.activeLeaf.view.file?.path ?? ''`);
+  record(
+    'AC27',
+    '引用块渲染态内链单击仍可跳转（单击不触发源码还原）',
+    !!link && activePath === 'probe-link-target.md',
+    `link=${JSON.stringify(link)} active=${JSON.stringify(activePath)}`,
+  );
+}
+
 // ---------------------------------------------------------------- AC17 / AC17b / AC17c
 
 const INDENT_SRC = [
@@ -893,13 +1154,28 @@ const INDENT_PROBE = `async function collectIndent() {
   };
 
   const saved = cm.scrollDOM.scrollTop;
-  for (let step = 0; step < 40; step++) {
+  const savedSelection = cm.state.selection;
+  // Step down and measure. Breaking on scrollTop >= max - 2 races the heightmap: right
+  // after widgets render, scrollHeight can still be short, so the loop believes it has
+  // reached the bottom while the document's last blocks were never on screen (AC17 flake).
+  // The reliable end condition is the scroll element refusing to move further.
+  for (let step = 0; step < 60; step++) {
+    await sleep(step === 0 ? 200 : 350);
     measure();
+    const before = cm.scrollDOM.scrollTop;
     const max = cm.scrollDOM.scrollHeight - cm.scrollDOM.clientHeight;
-    if (cm.scrollDOM.scrollTop >= max - 2) break;
-    cm.scrollDOM.scrollTop = Math.min(max, cm.scrollDOM.scrollTop + Math.floor(cm.scrollDOM.clientHeight * 0.7));
-    await sleep(250);
+    cm.scrollDOM.scrollTop = Math.min(max, before + Math.ceil(cm.scrollDOM.clientHeight * 0.6));
+    await sleep(150);
+    if (Math.abs(cm.scrollDOM.scrollTop - before) < 1) break;
   }
+  // The scroller can stop short of the tail: Obsidian leaves the last blocks inside a
+  // cm-gap that direct scrollTop writes never materialise (verified — the top-level
+  // table/code block stayed out of the DOM at max scroll). Moving the selection to the
+  // document end forces CM6 to render that viewport; selection and scroll are restored.
+  cm.dispatch({ selection: { anchor: cm.state.doc.length } });
+  await sleep(700);
+  measure();
+  cm.dispatch({ selection: savedSelection });
   cm.scrollDOM.scrollTop = saved;
   await sleep(300);
   out.tokens = tokens.size;

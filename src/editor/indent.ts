@@ -1,4 +1,8 @@
-import type { EditorView } from '@codemirror/view';
+import {
+  ViewPlugin,
+  type EditorView,
+  type ViewUpdate,
+} from '@codemirror/view';
 
 /**
  * Indentation for blocks rendered by our widgets.
@@ -12,6 +16,16 @@ import type { EditorView } from '@codemirror/view';
 
 /** How many siblings to inspect when looking for the owning list item. */
 const MAX_LIST_SCAN = 512;
+
+/**
+ * Last measured padding per source indent string.
+ *
+ * CM6 only renders the viewport, so a widget can be (re)created while the list item that
+ * owns it is outside the rendered range: `previousElementSibling` then cannot reach it and
+ * the widget would silently snap back to the content's left edge. Remembering the pixel
+ * column keyed by the block's own indent keeps the nesting visible in that case.
+ */
+const indentCache = new Map<string, number>();
 
 /** Leading whitespace, in characters (tabs count as one). */
 function leadingLength(text: string): number {
@@ -111,15 +125,26 @@ export function firstContentLeft(line: HTMLElement): number | null {
  */
 export function applyBlockIndent(wrap: HTMLElement, indent: string): void {
   if (indent === '') return;
+  // Lets the viewport refresher below find this widget again without knowing its type.
+  wrap.dataset.mdftIndent = indent;
 
   const measure = (): boolean => {
     if (!wrap.isConnected) return false;
     const item = findOwningItemLine(wrap, indent);
-    if (!item) return true;
+    if (!item) {
+      // The owner may simply be outside the rendered viewport. Reuse the last measured
+      // column for this indent instead of dropping the indentation.
+      const cached = indentCache.get(indent);
+      if (cached !== undefined) wrap.style.paddingLeft = `${cached.toFixed(2)}px`;
+      return true;
+    }
     const textLeft = firstContentLeft(item);
     if (textLeft === null) return true;
     const px = textLeft - wrap.getBoundingClientRect().left;
-    if (px > 0.5 && px < 400) wrap.style.paddingLeft = `${px.toFixed(2)}px`;
+    if (px > 0.5 && px < 400) {
+      wrap.style.paddingLeft = `${px.toFixed(2)}px`;
+      indentCache.set(indent, px);
+    }
     return true;
   };
 
@@ -129,6 +154,41 @@ export function applyBlockIndent(wrap: HTMLElement, indent: string): void {
     if (!measure()) setTimeout(measure, 0);
   });
 }
+
+/**
+ * Re-runs `applyBlockIndent` for every mounted widget whenever the rendered viewport
+ * changes.
+ *
+ * A widget's padding is computed once, at mount. If it mounts while the owning list line
+ * is outside the rendered range (fast scrolling virtualizes it away), the padding is
+ * missing and nothing re-measures it — the nested block stays flush left for as long as
+ * the widget lives. Re-measuring on viewport changes closes that hole; the measurement is
+ * idempotent, so doing it again costs one `getBoundingClientRect` per widget.
+ */
+export const widgetIndentRefresher = ViewPlugin.fromClass(
+  class {
+    private scheduled = false;
+
+    constructor(private readonly view: EditorView) {}
+
+    update(update: ViewUpdate): void {
+      if (update.viewportChanged) this.schedule();
+    }
+
+    private schedule(): void {
+      if (this.scheduled) return;
+      this.scheduled = true;
+      queueMicrotask(() => {
+        this.scheduled = false;
+        for (const el of Array.from(this.view.contentDOM.children)) {
+          if (!(el instanceof HTMLElement)) continue;
+          const indent = el.dataset.mdftIndent;
+          if (indent !== undefined) applyBlockIndent(el, indent);
+        }
+      });
+    }
+  },
+);
 
 /** The `.cm-line` element rendering the document line that starts at `pos`. */
 export function domLineAt(view: EditorView, pos: number): HTMLElement | null {

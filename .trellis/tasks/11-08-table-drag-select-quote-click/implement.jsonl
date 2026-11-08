@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/frontend/codemirror-widgets.md", "reason": "widget 事件、行装饰与验收脚本约束"}
+{"file": ".trellis/spec/frontend/data-safety.md", "reason": "零写入不变式与写回边界"}

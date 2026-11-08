@@ -203,6 +203,10 @@ MarkdownRenderer.render(info.app, markdown, body, info.file?.path ?? '', comp)
 
 **`ignoreEvent: true` 不等于"链接点不动"**：`ignoreEvent` 只决定 **CM6 是否处理** widget 内的事件，宿主 `MarkdownRenderer` 自己绑在 `a.internal-link` 上的点击处理器仍然生效。实测引用块 widget 内的 `[[笔记]]` 点击后正常跳转。所以不需要为了链接在 `ignoreEvent` 里写特例。
 
+**只读渲染块不要用 `mousedown` 进入编辑**：`preventDefault` 之后浏览器无法开始文本选择，用户连复制一句话都做不到；而把 selection 放进 region 又会让整段 widget 立即还原为源码。正确的手势是**单击不拦截**（保留选字/复制），**`dblclick` 才 dispatch selection**；`title="双击编辑源码"` 负责可发现性。链接/嵌入/表单控件的 `dblclick` 仍要排除。
+
+**`contenteditable=false` 的 island 里原生选字不可用，也不能用 `window.getSelection()` 代替**（实测）：Chromium 无法在 `.cm-content` 内这类 island 上起选（选区始终折叠，`caretRangeFromPoint` 也只会返回块边界的折叠 range）；而用程序给 `window.getSelection()` 设 Range 会被 Obsidian 的 selection 同步映射回文档位置，**拖拽途中 widget 就被重建/换节点**，最终常常直接还原成源码。可行方案是：widget 自己用逐字符 `getBoundingClientRect` 把坐标映射成 `(Text 节点, offset)`，用 `CSS.highlights.set(name, new Highlight(range))` 画选区（`::highlight(name)` 上色），并在 `document` 上接管 `copy` 事件写 `text/plain`。跨块选区要自己遍历克隆的 fragment 在块边界补换行（`Range.toString()` 会把两段拼成一行）。清空时机：新的 mousedown、外部 mousedown、Escape、`destroy`、`dblclick`。
+
 **`destroy` 之后 Promise 可能才 resolve**：用一个 `WeakSet` 记录已销毁的根节点，回调里先检查 `isConnected`，避免对已脱离的 DOM 调 `requestMeasure`。
 
 **渲染前剥掉列表缩进**：列表项内的引用块源码带 4 空格缩进，直接交给 `MarkdownRenderer` 会被解析成**代码块**。按 `region.indent` 去掉行首缩进后再渲染。
@@ -243,6 +247,22 @@ Decoration.line({
 
 **重算必须自限**：插件自己 `dispatch({})` 会让 CM6 重新读取装饰。用"内容寻址"的 key（所有 `from:margin` 拼起来）比较，未变化就直接返回，否则会形成 dispatch → update → dispatch 的循环。
 
+## 虚拟化下的缩进：测量失败 ≠ 真的没有缩进
+
+CM6 只渲染视口。父项列表行完全可能不在 DOM 里，这时：
+
+- `findOwningItemLine` 的 `previousElementSibling` 走链**找不到**父项（或跳过 `cm-gap` 后找到更远、错误的行）；
+- 被测块自己却可能已经在 DOM 里（位于视口另一处）。
+
+**不能把"找不到父项"当成"块是顶层的"。** 两种失败都真实出现过：
+
+1. **widget 侧**（`applyBlockIndent`）：widget 在父项行未渲染时被重建 → `padding-left` 丢失 → 嵌套表格/引用块贴回最左，而且 widget 不会再次测量，**永久错位**。修法两层：
+   - 按 `indent` 字符串缓存上次测到的像素列，找不到父项时回退到缓存；
+   - 注册一个 `ViewPlugin`，在 `update.viewportChanged` 时对所有带 `data-mdft-indent` 的已挂载 widget 重新测一次（测量幂等，代价是一次 `getBoundingClientRect`）。
+2. **原生代码行侧**（`codeIndent`）：打开围栏的行可见、但父项行在视口上方未渲染 → 旧代码 `cache.delete(startLine)` 把缓存清掉 → 缩进闪烁消失。修法：只有**确定是顶层**（`leadingWhitespace === ''`）才删除缓存；`findOwningItemLine` 返回 `null` 时保留缓存不动。
+
+配套的验收经验：滚动测量必须从**光标与滚动位置都归零**的干净状态开始。若文件打开时光标停在文末（Obsidian 会恢复上次光标），探针"跳到文末再恢复"后会留下「光标在末尾、scrollTop 在顶部」的错位，CM6 的 viewport 与 DOM 布局不一致，会制造出上述所有假象。`openFile` 必须同时 `dispatch({ selection: { anchor: 0 } })` 与 `scrollTop = 0`。
+
 ## 依赖版本备注
 
 `@codemirror/view` 6.38 的 `view.domAtPos(pos)` **只接受一个参数**（旧的 `bias` 第二参已从类型里移除）。需要精确映射时改用 `view.posAtDOM(line, 0)` 反向校验。
@@ -263,3 +283,12 @@ Decoration.line({
 **行装饰的断言要设上下界**。"不早于父项正文"只能排除贴左，无法排除缩进过头（例如按子项而非父项对齐）。用 `|a - b| <= 1px`，并专门放一个"块位于子项之后"的 fixture —— 那是唯一能暴露过度缩进的布局。
 
 **不要写结构上恒为假的选择器**。widget 是整行 replace，`'.cm-line.HyperMD-codeblock .mdft-table'` 永远为 0，断言等于没写。要证明"没接管代码块"，应断言 widget 矩形与代码行矩形**不相交**，并断言代码行仍有原生高亮节点。
+
+**交互验收禁止用合成事件**。`element.dispatchEvent(new MouseEvent('mousedown', {shiftKey:true}))` 绕过了命中测试、焦点转移与浏览器的真实事件链：合并功能的 AC4 曾用这种方式通过，但用户实际拖拽多选根本不工作。凡是验证"用户手势"的条目，一律用 `Input.dispatchMouseEvent`（拖拽要发 `mousePressed` → 多个 `mouseMoved` → `mouseReleased`；双击第二组用 `clickCount: 2`）。
+
+**拖拽选择的实现要点**（表格 widget）：
+
+- `mousedown` **不要** `preventDefault`：纯单击仍需要聚焦 `contenteditable` 才能"点进去打字"。
+- 只有当指针在按键按住时进入**另一个单元格**，才把本次按压升级为框选：此时清空 `window.getSelection()`、`blur()` 掉刚聚焦的输入框、给表格加 `is-dragging`（`user-select: none`）。
+- 拖拽结束监听 `window` 的 `mouseup`（`once + capture`），否则在表格外松手会留下粘滞的拖拽态。
+- 每次 `mouseover` 重建工具栏前先比较选区是否变化，否则拖过一格会重建一次。
