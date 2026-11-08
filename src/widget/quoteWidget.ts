@@ -3,6 +3,7 @@ import { WidgetType, type EditorView } from '@codemirror/view';
 import type { QuoteRegion, TableRegion } from '../editor/region';
 import { applyBlockIndent } from '../editor/indent';
 import { planInnerTables, type InnerTablePlan } from '../model/innerTable';
+import { projectQuoteLines, resolveQuoteLine, scanQuoteBlocks } from '../model/quoteLineMap';
 import type { TableGrid } from '../model/types';
 import { TableEditor } from './tableEditor';
 
@@ -319,6 +320,67 @@ function quotePosition(view: EditorView, wrap: HTMLElement): number | null {
 }
 
 /**
+ * Maps a double-click inside the rendered quote to the source line the click landed on.
+ *
+ * The renderer emits one `<blockquote>` whose element children are the quote's
+ * top-level blocks. `scanQuoteBlocks` models the same blocks from the source, so their
+ * order can be paired. Two things are never guessed: a mismatch in block counts, and a
+ * click outside the rendered quote. Both return null, and the caller keeps the old
+ * behaviour (enter the source at the quote's first line).
+ */
+function sourceAnchorForClick(
+  view: EditorView,
+  wrap: HTMLElement,
+  body: HTMLElement,
+  target: Element | null,
+  region: QuoteRegion,
+): number | null {
+  const root = body.querySelector(':scope > blockquote');
+  if (!root || !target || !root.contains(target)) return null;
+
+  // The clicked block is the ancestor that is a direct child of the rendered quote.
+  let block: Element | null = target;
+  while (block && block.parentElement !== root) block = block.parentElement;
+  if (!block) return null;
+  const blockIndex = Array.from(root.children).indexOf(block);
+  if (blockIndex < 0) return null;
+
+  // A click inside a list item maps to that item's own line. Nested items climb to
+  // their top-level item: the scanner records top-level items only.
+  let itemIndex: number | undefined;
+  let itemCount: number | undefined;
+  let item: Element | null = target.closest('li');
+  if (item) {
+    let list: Element | null = item.parentElement;
+    while (list && list.parentElement !== root) {
+      if (!list.parentElement || list.parentElement.tagName !== 'LI') {
+        list = null;
+        break;
+      }
+      item = list.parentElement;
+      list = item.parentElement;
+    }
+    if (item && list && (list.tagName === 'UL' || list.tagName === 'OL')) {
+      const items = Array.from(list.children).filter((child) => child.tagName === 'LI');
+      const index = items.indexOf(item);
+      if (index >= 0) {
+        itemIndex = index;
+        itemCount = items.length;
+      }
+    }
+  }
+
+  const projection = projectQuoteLines(region.source, region.indent);
+  const blocks = scanQuoteBlocks(projection.lines, projection.depths);
+  const line = resolveQuoteLine(blocks, root.children.length, blockIndex, itemIndex, itemCount);
+  if (line === null) return null;
+
+  const base = view.posAtDOM(wrap, 0);
+  const lineStart = projection.starts[line] + projection.prefixes[line].length;
+  return Math.max(base, Math.min(base + region.source.length, base + lineStart));
+}
+
+/**
  * Whether a rendered table still has the shape the scanner parsed.
  *
  * Pairing is positional, so a single misalignment would mount an editor over the wrong
@@ -523,8 +585,12 @@ export class QuoteWidget extends WidgetType {
       clearQuoteSelection();
       try {
         // Resolved from the DOM, not from a captured offset: the DOM may be reused after
-        // an edit above (see `eq`), so a captured `from` could be stale.
-        view.dispatch({ selection: { anchor: view.posAtDOM(wrap, 0) } });
+        // an edit above (see `eq`), so a captured `from` could be stale. When the click
+        // cannot be mapped back to a source line, fall back to the quote's first line.
+        const anchor =
+          sourceAnchorForClick(view, wrap, body, target, this.region) ??
+          view.posAtDOM(wrap, 0);
+        view.dispatch({ selection: { anchor }, scrollIntoView: true });
         view.focus();
       } catch {
         /* widget detached between dblclick and dispatch */

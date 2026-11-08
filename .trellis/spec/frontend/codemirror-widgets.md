@@ -332,3 +332,25 @@ CM6 只渲染视口。父项列表行完全可能不在 DOM 里，这时：
 - 工具栏按钮（如「转 MD」）的验收必须走真实鼠标 `mouseMoved` → `click`，因为工具栏只在 hover 时可见。
 - 导出验收替换 `navigator.clipboard` 的 `writeText` 与 `HTMLAnchorElement.prototype.click` 捕获结果，再 `fetch(blobUrl)` 读内容；不需要真的落文件，也不会污染 vault。
 - **这个 Electron 构建里 `navigator.clipboard.writeText` 是实例的自有属性**（`Object.hasOwn(clip, 'writeText') === true`），只改原型上的 `writeText` 不会拦截到任何调用，捕获结果永远是 `null`。补丁必须优先 `Object.defineProperty(clip, 'writeText', …)`，并为 `document.execCommand('copy')` 兜底路径也装一个桩。
+
+## Pattern：渲染块 → 源码行映射（双击定位）
+
+**场景**：引用块在渲染态是一个原子 widget，双击进源码时希望光标落在被点击的那一行，而不是块首。
+
+**五条契约**：
+
+| 契约 | 做法 |
+|---|---|
+| **只用于导航，不用于写盘** | 映射结果只喂给 `view.dispatch({ selection })`。不引入任何写盘路径，不绕过 `commitGrid`。 |
+| **单一投影实现** | `projectQuoteLines(source, indent)` 是"引用源码 → 渲染器看到的内容行"的唯一实现，`planInnerTables` 与双击定位共用。它同时给出 `prefixes`（每行被剥掉的前缀）、`starts`（相对偏移）、`depths`（`>` 层数）。 |
+| **顺序配对 + 数量校验** | 渲染器的外层 `<blockquote>` 的元素子节点，与 `scanQuoteBlocks(contentLines, depths)` 得到的顶层块按顺序配对；块数不一致一律返回 `null`，调用方回退到块首。列表项再用直接 `<li>` 序号对应 `itemStarts`，项数不一致退到列表首行。 |
+| **偏移每次实时解析** | `QuoteWidget.eq` 不比较偏移，DOM 可能在上方编辑后被复用；双击时用 `view.posAtDOM(wrap, 0)` 取当前基点，再叠加投影里的相对偏移。 |
+| **绝对不猜** | 找不到外层 `<blockquote>`、点击目标爬不到块、索引越界——全部回退。和引用内表格配对同一条原则：宁可定位不改善，不能定位错行。 |
+
+**块扫描的保守取舍**：`scanQuoteBlocks` 按 CommonMark 的常见规则切块（ATX / Setext / 列表 / 围栏 / 引用 / HTML / 分割线 / 段落与 lazy 续行）。它**不追求**与渲染器 100% 一致：任何拿不准的结构都会让块数对不上，从而安全回退。实测可用的"强制不一致"夹具：引用内 `- 甲` 紧跟 `* 乙`（不同 bullet 字符）会被渲染器拆成两个 `<ul>`，而扫描器只算一个列表。
+
+**验收经验**：
+
+- 双击必须走 CDP 真实鼠标：`realClick(x, y, 0, 1)` 后再 `realClick(x, y, 0, 2)`，Chromium 才会派发 `dblclick`。
+- 一个用例里连续测多个块时，双击之后引用已还原为源码；用 `editor.setCursor({ line: 0, ch: 0 })`（或点击引用外）让它重新渲染，再取下一个目标坐标。
+- 坐标取自目标元素的 `getBoundingClientRect()`（列表项取 `left + 12`），不要用整段引用的矩形。

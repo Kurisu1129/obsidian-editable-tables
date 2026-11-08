@@ -1906,6 +1906,165 @@ async function quoteCellCenter(quoteText, row, col) {
   );
 }
 
+// ---------------------------------------------------------------- AC40 / AC41 / AC42
+
+{
+  // Double-clicking rendered quote text enters source at the clicked block, not at the
+  // quote's first line. The mapping is conservative: when the rendered block count and
+  // the source block count disagree, the old "land on the first line" behaviour stays.
+  const SRC = [
+    '# 双击定位',
+    '',
+    '> 引用第一段',
+    '>',
+    '> - 列表一',
+    '> - 列表二',
+    '> - 列表三',
+    '>',
+    '> 引用最后一段',
+    '',
+    '后文',
+    '',
+  ].join('\n');
+
+  await openFile('fx-quote-dblclick.md', SRC);
+
+  const listTarget = JSON.parse(
+    await evaluate(`(() => {
+      const cm = app.workspace.activeLeaf.view.editor.cm;
+      const body = cm.contentDOM.querySelector('.mdft-quote__body');
+      const root = body && body.querySelector(':scope > blockquote');
+      if (!root) return JSON.stringify({ error: 'no root' });
+      const items = Array.from(root.querySelectorAll(':scope > ul > li'));
+      const el = items[2];
+      if (!el) return JSON.stringify({ error: 'no third item', count: items.length });
+      const r = el.getBoundingClientRect();
+      return JSON.stringify({ x: r.left + 12, y: r.top + r.height / 2, count: items.length });
+    })()`),
+  );
+
+  if (listTarget.x) await realDoubleClick(listTarget.x, listTarget.y);
+  await sleep(800);
+
+  const afterList = JSON.parse(
+    await evaluate(`(() => {
+      const view = app.workspace.activeLeaf.view;
+      return JSON.stringify({
+        widgets: view.editor.cm.contentDOM.querySelectorAll('.mdft-quote').length,
+        line: view.editor.getCursor().line,
+        text: view.editor.getLine(view.editor.getCursor().line),
+      });
+    })()`),
+  );
+
+  const listLine = SRC.split('\n').indexOf('> - 列表三');
+  record(
+    'AC40',
+    '双击引用内第 3 个列表项 → 整段进源码，光标落在该项自己的源码行',
+    !!listTarget.x && afterList.widgets === 0 && afterList.line === listLine &&
+      afterList.text === '> - 列表三',
+    JSON.stringify({ listTarget, afterList, expectedLine: listLine }),
+  );
+
+  // Re-render the quote, then double-click the trailing paragraph.
+  await evaluate(`app.workspace.activeLeaf.view.editor.setCursor({ line: 0, ch: 0 })`);
+  await sleep(900);
+
+  const paragraphTarget = JSON.parse(
+    await evaluate(`(() => {
+      const cm = app.workspace.activeLeaf.view.editor.cm;
+      const body = cm.contentDOM.querySelector('.mdft-quote__body');
+      const root = body && body.querySelector(':scope > blockquote');
+      if (!root) return JSON.stringify({ error: 'no root' });
+      const el = root.children[root.children.length - 1];
+      const r = el.getBoundingClientRect();
+      return JSON.stringify({ x: r.left + 12, y: r.top + r.height / 2 });
+    })()`),
+  );
+
+  if (paragraphTarget.x) await realDoubleClick(paragraphTarget.x, paragraphTarget.y);
+  await sleep(800);
+
+  const afterParagraph = JSON.parse(
+    await evaluate(`(() => {
+      const view = app.workspace.activeLeaf.view;
+      return JSON.stringify({
+        widgets: view.editor.cm.contentDOM.querySelectorAll('.mdft-quote').length,
+        line: view.editor.getCursor().line,
+        text: view.editor.getLine(view.editor.getCursor().line),
+      });
+    })()`),
+  );
+
+  const paragraphLine = SRC.split('\n').indexOf('> 引用最后一段');
+  record(
+    'AC41',
+    '双击引用内段落 → 光标落在该段落的源码行，而不是引用首行',
+    !!paragraphTarget.x && afterParagraph.widgets === 0 && afterParagraph.line === paragraphLine &&
+      afterParagraph.text === '> 引用最后一段',
+    JSON.stringify({ paragraphTarget, afterParagraph, expectedLine: paragraphLine }),
+  );
+
+  // A mixed bullet list renders as two <ul>s while the line scanner models one list,
+  // so the block counts disagree. The mapping must refuse and keep the old behaviour.
+  const FALLBACK = [
+    '# 回退',
+    '',
+    '> 引用开头',
+    '>',
+    '> - 甲',
+    '> * 乙',
+    '>',
+    '> 结尾',
+    '',
+    '后文',
+    '',
+  ].join('\n');
+
+  await openFile('fx-quote-fallback.md', FALLBACK);
+
+  const rendered = JSON.parse(
+    await evaluate(`(() => {
+      const cm = app.workspace.activeLeaf.view.editor.cm;
+      const body = cm.contentDOM.querySelector('.mdft-quote__body');
+      const root = body && body.querySelector(':scope > blockquote');
+      if (!root) return JSON.stringify({ error: 'no root' });
+      const items = Array.from(root.querySelectorAll('li'));
+      const el = items[items.length - 1];
+      if (!el) return JSON.stringify({ error: 'no items' });
+      const r = el.getBoundingClientRect();
+      return JSON.stringify({
+        blocks: Array.from(root.children).map((e) => e.tagName),
+        x: r.left + 12,
+        y: r.top + r.height / 2,
+      });
+    })()`),
+  );
+
+  if (rendered.x) await realDoubleClick(rendered.x, rendered.y);
+  await sleep(800);
+
+  const afterFallback = JSON.parse(
+    await evaluate(`(() => {
+      const view = app.workspace.activeLeaf.view;
+      return JSON.stringify({
+        widgets: view.editor.cm.contentDOM.querySelectorAll('.mdft-quote').length,
+        line: view.editor.getCursor().line,
+        text: view.editor.getLine(view.editor.getCursor().line),
+      });
+    })()`),
+  );
+
+  const quoteStart = FALLBACK.split('\n').indexOf('> 引用开头');
+  record(
+    'AC42',
+    '渲染块数与源码块数不一致时保守回退：仍进入源码，光标落在引用首行',
+    rendered.blocks.length === 4 && afterFallback.widgets === 0 &&
+      afterFallback.line === quoteStart && afterFallback.text === '> 引用开头',
+    JSON.stringify({ blocks: rendered.blocks, afterFallback, expectedLine: quoteStart }),
+  );
+}
+
 // ---------------------------------------------------------------- AC37 / AC38
 
 {
@@ -2030,18 +2189,19 @@ async function quoteCellCenter(quoteText, row, col) {
 // ---------------------------------------------------------------- AC33
 
 {
-  // The suite's numbering goes AC1–AC27, then AC29–AC38 (AC28 was never defined).
-  // AC33 is this summary itself.
+  // The suite's numbering goes AC1–AC27, then AC29–AC38, then AC40–AC42
+  // (AC28 was never defined; AC33 is this summary itself).
   const prior = [];
   for (let i = 1; i <= 38; i++) {
     if (i === 28 || i === 33) continue;
     prior.push('AC' + i);
   }
+  for (let i = 40; i <= 42; i++) prior.push('AC' + i);
   const missing = prior.filter((id) => !results.some((r) => r.id === id));
   const failed = prior.filter((id) => results.some((r) => r.id === id && !r.pass));
   record(
     'AC33',
-    '既有 AC1–AC27、AC29–AC32 与新增 AC34–AC38 全部通过',
+    '既有 AC1–AC27、AC29–AC32、AC34–AC38 与新增 AC40–AC42 全部通过',
     missing.length === 0 && failed.length === 0,
     `missing=${missing.join(',') || 'none'} failed=${failed.join(',') || 'none'}`,
   );
