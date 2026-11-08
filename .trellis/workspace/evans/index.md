@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 6
+- **Total Sessions**: 7
 - **Last Active**: 2026-11-08
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~198 | Active |
+| `journal-1.md` | ~220 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 7 | 2026-11-08 | 引用块双击定位到所点行 | `d214b86` | `main` |
 | 6 | 2026-11-08 | 表格编辑写回 Markdown 与导出 md | `67f5f8a` | `main` |
 | 5 | 2026-11-08 | 引用块内表格可编辑 | `674f850` | `main` |
 | 4 | 2026-11-08 | 表格拖拽多选与引用块拖拽选字 | `ed478c6` | `main` |

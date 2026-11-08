@@ -196,3 +196,25 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 7: 引用块双击定位到所点行
+<!-- trellis-session: v=2 fp=b270232f14b68ec6 -->
+
+**Date**: 2026-11-08
+**Task**: 引用块双击定位到所点行
+**Branch**: `main`
+
+### Summary
+
+双击渲染态引用块进入源码时，光标落在被点击内容对应的源码行：新增 quoteLineMap（projectQuoteLines / scanQuoteBlocks / resolveQuoteLine），把外层 blockquote 的元素子节点与源码顶层块顺序配对，列表项用直接 li 序号精确定位；块数或项数不一致一律回退到引用首行。projectQuoteLines 抽取为 innerTable 与双击定位共用的单一投影实现。单测 122；验收新增 AC40–AC42，42/42 通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d214b86` | feat: 引用块双击定位到所点行 |
+
+### Status
+
+[OK] **Completed**
