@@ -763,8 +763,8 @@ const QUOTE_SRC = [
   );
   record(
     'AC14',
-    '引用块内的表格渲染为 <table>，不再是管道源码',
-    d.quotes === 1 && d.blockquote && d.table && !d.literalPipe && !d.ownTableInside,
+    '引用块内的表格渲染为可编辑表格（复用正文的 TableEditor），不再是管道源码',
+    d.quotes === 1 && d.blockquote && d.table && d.ownTableInside && !d.literalPipe,
     JSON.stringify(d),
   );
   record(
@@ -1362,6 +1362,369 @@ const aligned = (a, b) => typeof a === 'number' && typeof b === 'number' && Math
   record(
     'AC21',
     '既有 AC1–AC13 全部仍然通过',
+    missing.length === 0 && failed.length === 0,
+    `missing=${missing.join(',') || 'none'} failed=${failed.join(',') || 'none'}`,
+  );
+}
+
+// ---------------------------------------------------------------- AC29 / AC30 / AC31 / AC32
+
+/** Types into the element at (x, y) through the real input path an IME also takes. */
+async function typeAt(x, y, text) {
+  await realClick(x, y);
+  await client.send('Input.insertText', { text });
+  await sleep(250);
+}
+
+/** Moves the real pointer (so CSS :hover applies) without pressing a button. */
+async function realMove(x, y) {
+  await client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, buttons: 0 });
+  await sleep(250);
+}
+
+/** The quote whose text contains `quoteText`. */
+const quoteByText = (quoteText, inner) => `[...app.workspace.activeLeaf.view.editor.cm.contentDOM.querySelectorAll('.mdft-quote')].find((q) => q.textContent.includes(${JSON.stringify(quoteText)}))${inner}`;
+
+/** Center of a toolbar button inside a specific quote, or null when it is not hovered. */
+async function quoteButtonCenter(quoteText, label) {
+  const raw = await evaluate(`(() => {
+    const quote = ${quoteByText(quoteText, '')};
+    if (!quote) return null;
+    const el = [...quote.querySelectorAll('.mdft-btn')].find((b) => b.textContent === ${JSON.stringify(label)});
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) return null;
+    return JSON.stringify({ x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) });
+  })()`);
+  return raw ? JSON.parse(raw) : null;
+}
+
+/** Center of one cell inside a specific quote. */
+async function quoteCellCenter(quoteText, row, col) {
+  const raw = await evaluate(`(() => {
+    const quote = ${quoteByText(quoteText, '')};
+    if (!quote) return null;
+    const el = quote.querySelector('.mdft-table td[data-row="${row}"][data-col="${col}"] .mdft-cell-wrapper');
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return JSON.stringify({ x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) });
+  })()`);
+  return raw ? JSON.parse(raw) : null;
+}
+
+{
+  const QUOTE_TABLE_SRC = [
+    '# 引用内表格',
+    '',
+    '> 引用第一行',
+    '>',
+    '> | 甲 | 乙 |',
+    '> | --- | --- |',
+    '> | 1 | 2 |',
+    '>',
+    '> 结尾',
+    '',
+    '后文',
+    '',
+  ].join('\n');
+
+  await openFile('fx-quote-table.md', QUOTE_TABLE_SRC);
+  const mounted = JSON.parse(
+    await evaluate(`(() => {
+      const cm = app.workspace.activeLeaf.view.editor.cm;
+      return JSON.stringify({
+        quotes: cm.contentDOM.querySelectorAll('.mdft-quote').length,
+        inner: cm.contentDOM.querySelectorAll('.mdft-quote .mdft-table').length,
+        tds: cm.contentDOM.querySelectorAll('.mdft-quote .mdft-table td').length,
+        // Any table the upgrade missed would still be a plain rendered table.
+        staticTables: cm.contentDOM.querySelectorAll('.mdft-quote blockquote table:not(.mdft-table__el)').length,
+      });
+    })()`),
+  );
+
+  const cell = await quoteCellCenter('引用第一行', 1, 1);
+  if (cell) await typeAt(cell.x, cell.y, '改');
+  const focusState = JSON.parse(
+    await evaluate(`(() => {
+      const cm = app.workspace.activeLeaf.view.editor.cm;
+      const el = cm.contentDOM.querySelector('.mdft-quote .mdft-table td[data-row="1"][data-col="1"] .mdft-cell-wrapper');
+      const ae = document.activeElement;
+      return JSON.stringify({
+        text: el ? el.textContent : null,
+        inCell: ae instanceof Element && !!ae.closest('.mdft-quote .mdft-table'),
+      });
+    })()`),
+  );
+  await pressKey('Enter', 0, 'Enter', 13);
+  await sleep(1600);
+
+  const after = JSON.parse(
+    await evaluate(`(() => {
+      const cm = app.workspace.activeLeaf.view.editor.cm;
+      return JSON.stringify({
+        doc: app.workspace.activeLeaf.view.editor.getValue(),
+        quotes: cm.contentDOM.querySelectorAll('.mdft-quote').length,
+        inner: cm.contentDOM.querySelectorAll('.mdft-quote .mdft-table').length,
+        quoteLines: cm.contentDOM.querySelectorAll('.HyperMD-quote').length,
+      });
+    })()`),
+  );
+
+  const docLines = after.doc.split('\n');
+  const start = docLines.findIndex((l) => l.includes('<table>'));
+  const end = docLines.findIndex((l) => l.includes('</table>'));
+  const tableLines = start >= 0 && end > start ? docLines.slice(start, end + 1) : [];
+  const allPrefixed = tableLines.length > 0 && tableLines.every((l) => l.startsWith('> '));
+  const outsideIntact =
+    after.doc.startsWith('# 引用内表格\n\n> 引用第一行\n') && after.doc.endsWith('\n\n后文\n');
+
+  record(
+    'AC29',
+    '引用块内表格渲染为可编辑表格：真实点击输入 + Enter 写回，每行保留 "> " 前缀',
+    mounted.inner === 1 && mounted.tds === 2 && mounted.staticTables === 0 &&
+      !!cell && focusState.inCell && /改/.test(focusState.text ?? '') &&
+      allPrefixed && tableLines.some((l) => l.includes('改')) &&
+      outsideIntact && after.quotes === 1 && after.inner === 1 && after.quoteLines === 0,
+    JSON.stringify({ mounted, cell, focusState, tableLines, outsideIntact, quotes: after.quotes, inner: after.inner, quoteLines: after.quoteLines }),
+  );
+}
+
+{
+  // ---- AC30: a structural action on the embedded table, then undo ----
+  const before = await evaluate(`app.workspace.activeLeaf.view.editor.getValue()`);
+  const beforeTrs = (before.match(/<tr>/g) || []).length;
+
+  // The toolbar only renders on hover, so move the real pointer over the table first.
+  const hover = await quoteCellCenter('引用第一行', 1, 0);
+  if (hover) await realMove(hover.x, hover.y);
+  const addRow = await quoteButtonCenter('引用第一行', '↓行');
+  if (addRow) await realClick(addRow.x, addRow.y);
+  await sleep(1600);
+
+  const mid = JSON.parse(
+    await evaluate(`(() => {
+      const cm = app.workspace.activeLeaf.view.editor.cm;
+      const doc = app.workspace.activeLeaf.view.editor.getValue();
+      const lines = doc.split('\\n');
+      const start = lines.findIndex((l) => l.includes('<table>'));
+      const end = lines.findIndex((l) => l.includes('</table>'));
+      const tableLines = start >= 0 && end > start ? lines.slice(start, end + 1) : [];
+      return JSON.stringify({
+        doc,
+        trs: (doc.match(/<tr>/g) || []).length,
+        allPrefixed: tableLines.length > 0 && tableLines.every((l) => l.startsWith('> ')),
+        inner: cm.contentDOM.querySelectorAll('.mdft-quote .mdft-table').length,
+      });
+    })()`),
+  );
+
+  await pressKey('z', 2, 'KeyZ', 90);
+  await sleep(1500);
+  const undone = await evaluate(`app.workspace.activeLeaf.view.editor.getValue()`);
+
+  record(
+    'AC30',
+    '引用内表格结构操作（插入行）写回正确，Ctrl+Z 恢复原状',
+    !!addRow && mid.trs === beforeTrs + 1 && mid.allPrefixed && mid.inner === 1 && undone === before,
+    JSON.stringify({ addRow, beforeTrs, midTrs: mid.trs, allPrefixed: mid.allPrefixed, inner: mid.inner, undone: undone === before }),
+  );
+}
+
+{
+  // ---- AC31: list-nested quote and nested quote ----
+  const NESTED_QUOTE_SRC = [
+    '# 嵌套引用表格',
+    '',
+    '- 列表项',
+    '',
+    '  > 列表里的引用',
+    '  >',
+    '  > | a | b |',
+    '  > | --- | --- |',
+    '  > | 1 | 2 |',
+    '',
+    '> 外层',
+    '> > 内层',
+    '> >',
+    '> > | c | d |',
+    '> > | --- | --- |',
+    '> > | 3 | 4 |',
+    '',
+  ].join('\n');
+
+  await openFile('fx-quote-nested-table.md', NESTED_QUOTE_SRC);
+  const mounted = JSON.parse(
+    await evaluate(`(() => {
+      const cm = app.workspace.activeLeaf.view.editor.cm;
+      return JSON.stringify({
+        quotes: cm.contentDOM.querySelectorAll('.mdft-quote').length,
+        inner: cm.contentDOM.querySelectorAll('.mdft-quote .mdft-table').length,
+      });
+    })()`),
+  );
+
+  const cellA = await quoteCellCenter('列表里的引用', 1, 1);
+  if (cellA) await typeAt(cellA.x, cellA.y, 'A');
+  await pressKey('Enter', 0, 'Enter', 13);
+  await sleep(1600);
+
+  // The second quote's DOM is reused while the document shifted under it; its write must
+  // still land on its own range (a stale captured offset would be rejected or corrupt).
+  const cellB = await quoteCellCenter('内层', 1, 1);
+  if (cellB) await typeAt(cellB.x, cellB.y, 'B');
+  await pressKey('Enter', 0, 'Enter', 13);
+  await sleep(1600);
+
+  const finalDoc = await evaluate(`app.workspace.activeLeaf.view.editor.getValue()`);
+  const lines = finalDoc.split('\n');
+  const listStart = lines.findIndex((l) => l.includes('<table>'));
+  const listEnd = lines.findIndex((l) => l.includes('</table>'));
+  const listTable = listStart >= 0 && listEnd > listStart ? lines.slice(listStart, listEnd + 1) : [];
+  const nestedStart = lines.findIndex((l) => l.startsWith('> > <table>'));
+  const nestedEnd = lines.findIndex((l, i) => i > nestedStart && l.startsWith('> > </table>'));
+  const nestedTable = nestedStart >= 0 && nestedEnd > nestedStart ? lines.slice(nestedStart, nestedEnd + 1) : [];
+
+  const listPrefixed = listTable.length > 0 && listTable.every((l) => l.startsWith('  > '));
+  const nestedPrefixed = nestedTable.length > 0 && nestedTable.every((l) => l.startsWith('> > '));
+  const structureIntact =
+    finalDoc.includes('- 列表项') &&
+    finalDoc.includes('  > 列表里的引用') &&
+    finalDoc.includes('> 外层') &&
+    finalDoc.includes('> > 内层');
+  const firstEditKept = /A/.test(listTable.join('\n'));
+  const secondEditKept = /B/.test(nestedTable.join('\n'));
+
+  const afterState = JSON.parse(
+    await evaluate(`(() => {
+      const cm = app.workspace.activeLeaf.view.editor.cm;
+      return JSON.stringify({
+        quotes: cm.contentDOM.querySelectorAll('.mdft-quote').length,
+        inner: cm.contentDOM.querySelectorAll('.mdft-quote .mdft-table').length,
+      });
+    })()`),
+  );
+
+  record(
+    'AC31',
+    '列表内引用与嵌套引用中的表格可编辑：前缀/层级保留，偏移漂移后仍写对区间',
+    mounted.quotes === 2 && mounted.inner === 2 &&
+      listPrefixed && nestedPrefixed && firstEditKept && secondEditKept && structureIntact &&
+      afterState.quotes === 2 && afterState.inner === 2,
+    JSON.stringify({ mounted, listTable, nestedTable, listPrefixed, nestedPrefixed, firstEditKept, secondEditKept, structureIntact, afterState }),
+  );
+}
+
+{
+  // ---- AC32: the quote's own text gestures must be unaffected by the embedded table ----
+  const QUOTE_MIX_SRC = [
+    '# 引用交互',
+    '',
+    '> 引用文字一',
+    '> 引用文字二',
+    '>',
+    '> | a | b |',
+    '> | --- | --- |',
+    '> | 1 | 2 |',
+    '',
+    '后文',
+    '',
+  ].join('\n');
+
+  await openFile('fx-quote-mix.md', QUOTE_MIX_SRC);
+  const rect = JSON.parse(
+    await evaluate(`(() => {
+      const cm = app.workspace.activeLeaf.view.editor.cm;
+      const p = cm.contentDOM.querySelector('.mdft-quote__body blockquote p');
+      if (!p) return JSON.stringify(null);
+      const r = p.getBoundingClientRect();
+      return JSON.stringify({ x: Math.round(r.left + 6), y: Math.round(r.top + 10) });
+    })()`),
+  );
+
+  await realClick(rect.x, rect.y);
+  const afterClick = JSON.parse(
+    await evaluate(`(() => {
+      const cm = app.workspace.activeLeaf.view.editor.cm;
+      return JSON.stringify({
+        widgets: cm.contentDOM.querySelectorAll('.mdft-quote').length,
+        quoteLines: cm.contentDOM.querySelectorAll('.HyperMD-quote').length,
+      });
+    })()`),
+  );
+
+  await realDrag(rect, { x: rect.x + 260, y: rect.y });
+  const afterDrag = JSON.parse(
+    await evaluate(`(() => {
+      const cm = app.workspace.activeLeaf.view.editor.cm;
+      const wrap = cm.contentDOM.querySelector('.mdft-quote');
+      const dt = new DataTransfer();
+      const ev = new ClipboardEvent('copy', { clipboardData: dt, bubbles: true, cancelable: true });
+      const target = document.activeElement instanceof HTMLElement ? document.activeElement : document.body;
+      target.dispatchEvent(ev);
+      return JSON.stringify({
+        selected: wrap ? wrap.dataset.mdftSelection ?? '' : '',
+        highlighted: CSS.highlights?.has?.('mdft-quote-selection') ?? false,
+        copied: dt.getData('text/plain'),
+        prevented: ev.defaultPrevented,
+        widgets: cm.contentDOM.querySelectorAll('.mdft-quote').length,
+      });
+    })()`),
+  );
+
+  // Double-clicking the embedded table belongs to the table, not to the quote.
+  const cell = await quoteCellCenter('引用文字一', 1, 0);
+  if (cell) await realDoubleClick(cell.x, cell.y);
+  const afterCellDouble = JSON.parse(
+    await evaluate(`(() => {
+      const cm = app.workspace.activeLeaf.view.editor.cm;
+      return JSON.stringify({
+        widgets: cm.contentDOM.querySelectorAll('.mdft-quote').length,
+        quoteLines: cm.contentDOM.querySelectorAll('.HyperMD-quote').length,
+      });
+    })()`),
+  );
+
+  await realDoubleClick(rect.x, rect.y);
+  const afterTextDouble = JSON.parse(
+    await evaluate(`(() => {
+      const cm = app.workspace.activeLeaf.view.editor.cm;
+      return JSON.stringify({
+        widgets: cm.contentDOM.querySelectorAll('.mdft-quote').length,
+        quoteLines: cm.contentDOM.querySelectorAll('.HyperMD-quote').length,
+        text: cm.state.doc.lineAt(cm.state.selection.main.head).text,
+      });
+    })()`),
+  );
+
+  record(
+    'AC32',
+    '引用块文字交互无回归：单击/拖选复制保留渲染，双击文字进源码，双击表格不进源码',
+    !!rect &&
+      afterClick.widgets === 1 && afterClick.quoteLines === 0 &&
+      /引用文字一/.test(afterDrag.selected) && afterDrag.highlighted && afterDrag.prevented &&
+      /引用文字一/.test(afterDrag.copied) && afterDrag.widgets === 1 &&
+      !!cell && afterCellDouble.widgets === 1 && afterCellDouble.quoteLines === 0 &&
+      afterTextDouble.widgets === 0 && afterTextDouble.quoteLines > 0 &&
+      afterTextDouble.text.trimStart().startsWith('>'),
+    JSON.stringify({ rect, afterClick, afterDrag, cell, afterCellDouble, afterTextDouble }),
+  );
+}
+
+// ---------------------------------------------------------------- AC33
+
+{
+  // The suite's own numbering goes AC1–AC27, then the ACs added with this task (AC29–AC32).
+  // There is no AC28 — it was never defined, so it must not be demanded here.
+  const prior = [];
+  for (let i = 1; i <= 32; i++) {
+    if (i === 28) continue;
+    prior.push('AC' + i);
+  }
+  const missing = prior.filter((id) => !results.some((r) => r.id === id));
+  const failed = prior.filter((id) => results.some((r) => r.id === id && !r.pass));
+  record(
+    'AC33',
+    '既有 AC1–AC27 与新增 AC29–AC32 全部通过',
     missing.length === 0 && failed.length === 0,
     `missing=${missing.join(',') || 'none'} failed=${failed.join(',') || 'none'}`,
   );

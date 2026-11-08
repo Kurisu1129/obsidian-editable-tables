@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端校验清单索引"}
+{"file": ".trellis/spec/frontend/data-safety.md", "reason": "写回边界与零写入校验"}

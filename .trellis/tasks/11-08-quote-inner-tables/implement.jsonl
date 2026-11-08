@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/frontend/codemirror-widgets.md", "reason": "widget 事件、块级高度、引用块 contenteditable=false 交互约束与验收脚本要求"}
+{"file": ".trellis/spec/frontend/data-safety.md", "reason": "唯一写盘路径、零写入不变式、source 校验与引用前缀保留"}
