@@ -9,6 +9,9 @@ node_modules/
 # Local verification artefacts
 .shots/
 
+# Locally built distributable packages (release assets are hosted on GitHub)
+release/dist/
+
 # Test vault: Obsidian's own mutable state, not project source
 spike-vault/.obsidian/workspace.json
 spike-vault/.obsidian/workspace-mobile.json

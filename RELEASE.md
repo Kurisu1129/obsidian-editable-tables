@@ -25,6 +25,31 @@ git push origin 0.2.0
 
 workflow 会跑测试、构建、校验 tag 与 manifest 版本一致，然后创建 release 并附上三个文件。
 
+## 离线安装包
+
+给不便访问 GitHub Releases 的机器准备一个 zip：解压后把 `editable-tables/` 整个文件夹放进 `<库>/.obsidian/plugins/`。包内布局：
+
+```
+editable-tables-<version>.zip
+├─ editable-tables/
+│  ├─ main.js
+│  ├─ manifest.json
+│  └─ styles.css
+└─ 安装说明.txt
+```
+
+本地构建后打包：
+
+```powershell
+$v = (Get-Content manifest.json -Raw | ConvertFrom-Json).version
+$stage = Join-Path $env:TEMP "editable-tables-$v"
+New-Item -ItemType Directory "$stage\editable-tables" -Force | Out-Null
+Copy-Item main.js,manifest.json,styles.css "$stage\editable-tables"
+Compress-Archive "$stage\*" "release\dist\editable-tables-$v.zip"
+```
+
+`release/dist/` 不进入 git；需要分发时把 zip 附到对应 GitHub release（`gh release upload <version> <zip>`）。
+
 ## 提交到 Obsidian 社区目录
 
 官方流程已改为在 [community.obsidian.md](https://community.obsidian.md) 提交，**不再向 `obsidian-releases` 提 PR**。目录会读取仓库默认分支 HEAD 上的 `manifest.json`，并下载 tag 与 `version` 匹配的 release。
