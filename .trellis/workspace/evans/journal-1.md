@@ -91,3 +91,42 @@
 - 下次从 implement.md 阶段 1 起：先做 kind→tableKind 改名，再泛化 region 模型（唯一一次动既有成功路径，阶段末是强回滚点）
 - 阶段 2 引用块渲染 → 阶段 3 缩进对齐 → 阶段 4 护栏收尾
 - 缺一张证据：门禁 0.1 的 AFTER 态截图漏拍，重跑时顺手补拍（BEFORE 态见 spikes/shots/probe4.png）
+
+
+## Session 3: 引用块整段渲染与列表项内嵌块缩进：复核修复 + 验收收紧
+<!-- trellis-session: v=2 fp=642c491cc299189c -->
+
+**Date**: 2026-11-08
+**Task**: 引用块整段渲染与列表项内嵌块缩进：复核修复 + 验收收紧
+**Branch**: `main`
+
+### Summary
+
+15 条复核意见全部处置（2 条误报），修复围栏/front matter/callout/lazy/owner-line/长代码块缓存/点击进入等问题；AC17/AC17c/AC6/AC20 改为可证伪断言，真实 Obsidian 24/24，单测 63/63
+
+### Main Changes
+
+- QuoteWidget：MarkdownRenderer 渲染、Component 生命周期、ResizeObserver 高度上报、点击进入源码
+- codeIndent：表格/引用 widget 用 padding-left、原生代码块用行装饰 margin-left !important，按围栏起始行缓存像素
+- scanQuote：连续/嵌套/lazy/callout 跳过，围栏与 front matter 排除
+- 验收：AC17 1px 上下界 + 子项之后用例；AC17c 可证伪零接管；AC6/AC20 点击坐标进正文；AC17 滚动采集防虚拟化漏测
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `061efd2` | feat: 引用块整段渲染与列表项内嵌块缩进对齐 |
+| `2d6f6c7` | docs(task): 引用块渲染与嵌套缩进的规划、验收与复核记录 |
+
+### Testing
+
+- [OK] node scripts/acceptance.mjs -> 24/24 连续两次通过
+- [OK] npm test -> 63/63；npm run typecheck / npm run build 通过
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 剩余边界：缩进代码块内的 > 误判、源码模式加载、主题切换后 padding 需重渲染、region 双扫描未合并
