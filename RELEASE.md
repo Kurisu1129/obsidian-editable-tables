@@ -4,21 +4,18 @@
 
 ## 当前状态
 
-- 仓库还没有配置 GitHub remote（`git remote -v` 为空）。
+- 公开仓库已创建：<https://github.com/Kurisu1129/obsidian-editable-tables>，本地 `origin` 已配置，`main` 已推送。
 - 官方列表要求的文件已就位：`manifest.json`、`versions.json`、`LICENSE`、`README.md`、`styles.css`。
 - `main.js` 是构建产物（`.gitignore` 已排除），由 `.github/workflows/release.yml` 在打 tag 时构建并附到 release。
-- 本机没有 `gh` CLI，也没有凭证助手；创建远程仓库/推送需要你提供仓库地址与 GitHub 登录。
+- GitHub CLI 已登录 `Kurisu1129`，scopes 包含 `repo` 与 `workflow`。
 
-## 1. 创建公开仓库并推送
+## 1. 仓库与推送
 
-在 GitHub 创建 **public** 仓库（建议名 `obsidian-editable-tables`），然后：
+已完成。后续日常提交：
 
 ```bash
-git remote add origin git@github.com:<owner>/obsidian-editable-tables.git
-git push -u origin main
+git push
 ```
-
-把 `release/community-plugins-entry.json` 里的 `repo` 改成实际的 `<owner>/<repo>`。
 
 ## 2. 发布一个 release
 
@@ -43,7 +40,7 @@ git push origin 0.1.0
 ## 3. 提交到官方社区列表
 
 1. Fork [`obsidianmd/obsidian-releases`](https://github.com/obsidianmd/obsidian-releases)。
-2. 在 `community-plugins.json` 数组中加入 `release/community-plugins-entry.json` 的内容（把 `repo` 换成实际地址）。按仓库现有惯例放到数组末尾；如果文件按 `id` 排序，则插入到对应位置。
+2. 在 `community-plugins.json` 数组中加入 `release/community-plugins-entry.json` 的内容（`repo` 已是实际地址）。按仓库现有惯例放到数组末尾；如果文件按 `id` 排序，则插入到对应位置。
 3. 提交 PR，标题建议：`Add plugin: Editable Tables`。
 4. 等待 Obsidian 团队审核（通常几天）。合并后插件会出现在「设置 → 第三方插件 → 浏览」中。
 
@@ -55,7 +52,7 @@ git push origin 0.1.0
   "name": "Editable Tables",
   "author": "evans",
   "description": "把 Live Preview 中的表格渲染为可编辑网格：支持列表项内嵌表格、单元格原地编辑、增删行列、合并拆分单元格；引用块整段渲染，列表项内嵌的块与父项正文对齐。",
-  "repo": "evans/obsidian-editable-tables"
+  "repo": "Kurisu1129/obsidian-editable-tables"
 }
 ```
 
